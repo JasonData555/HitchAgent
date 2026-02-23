@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     record = await getRecord(TABLE, tileId);
   } catch (err) {
     log('error', { error: err.message, tileId });
-    return errorResponse(res, 404, `Candidate Tile not found: ${tileId}`);
+    return errorResponse(res, 404, `Candidate Tile not found: ${tileId} — ${err.message}`);
   }
 
   const { fields } = record;
