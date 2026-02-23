@@ -15,7 +15,7 @@ import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib
 import { createCandidateTilePresentation } from '../lib/pptx-tile.js';
 import { log } from '../lib/logger.js';
 
-const TABLE = 'Candidate Tile';
+const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
 const PPTX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 

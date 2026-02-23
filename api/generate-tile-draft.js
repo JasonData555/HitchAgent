@@ -14,7 +14,7 @@ import { extractTextFromPdf } from '../lib/pdf-extract.js';
 import { synthesizeCandidateContent } from '../lib/anthropic.js';
 import { log } from '../lib/logger.js';
 
-const TABLE = 'Candidate Tile';
+const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
 const MAX_GENERATIONS = 5;
 
 function errorResponse(res, status, message) {
