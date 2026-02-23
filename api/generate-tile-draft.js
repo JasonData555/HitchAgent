@@ -15,7 +15,6 @@ import { synthesizeCandidateContent } from '../lib/anthropic.js';
 import { log } from '../lib/logger.js';
 
 const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
-const MAX_GENERATIONS = 5;
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -71,15 +70,6 @@ export default async function handler(req, res) {
     );
   }
 
-  const generationCount = fields['Tile Generation Count'] ?? 0;
-  if (generationCount >= MAX_GENERATIONS) {
-    return errorResponse(
-      res,
-      400,
-      `Generation limit reached (${MAX_GENERATIONS}). Contact admin to reset.`
-    );
-  }
-
   // ── Extract candidate data ───────────────────────────────────────────────
   const candidateData = {
     name: candidateName,
@@ -131,7 +121,6 @@ export default async function handler(req, res) {
     // Write error status to Airtable so PM sees it
     await updateRecord(TABLE, tileId, {
       'Tile Draft Status': 'Draft Error',
-      'Tile Draft Error': err.message,
     }).catch(() => {});
     return errorResponse(res, 500, `Content synthesis failed: ${err.message}`);
   }
@@ -145,9 +134,6 @@ export default async function handler(req, res) {
       'Current Situation': synthesized.currentSituation,
       'Anticipated Concerns': synthesized.anticipatedConcerns,
       'Tile Draft Status': 'Draft Ready',
-      'Resume Parse Status': resumeParseStatus,
-      'Tile Generation Count': generationCount + 1,
-      'Tile Draft Error': '',
     });
   } catch (err) {
     log('error', { error: err.message, stack: err.stack, tileId });

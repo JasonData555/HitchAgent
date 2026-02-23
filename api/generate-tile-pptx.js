@@ -82,7 +82,7 @@ export default async function handler(req, res) {
   const roleTitle        = getFieldValue(fields, 'Role Title');
   const clientName       = getFieldValue(fields, 'Client');
 
-  const photoUrl      = getAttachmentUrl(fields, 'Photo');
+  const photoUrl      = getAttachmentUrl(fields, 'Profile Pic');
   const hitchLogoUrl  = process.env.HITCH_LOGO_URL || null;
 
   log('airtable_fetch_complete', { candidateName, tileId });
