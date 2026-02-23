@@ -148,7 +148,6 @@ export default async function handler(req, res) {
     data: {
       tileId,
       candidateName,
-      generationCount: generationCount + 1,
     },
     warnings,
   });
