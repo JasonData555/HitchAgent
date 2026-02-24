@@ -10,6 +10,7 @@
  * Requires: Tile Draft Status = "Approved"
  */
 
+import { randomUUID, timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { createCandidateTilePresentation } from '../lib/pptx-tile.js';
@@ -18,6 +19,7 @@ import { log } from '../lib/logger.js';
 const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
 const PPTX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const TILE_ID_RE = /^rec[A-Za-z0-9]{14}$/;
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -28,6 +30,17 @@ function errorResponse(res, status, message) {
   });
 }
 
+/** Constant-time API key comparison to prevent timing attacks. */
+function isValidApiKey(provided, expected) {
+  if (!provided || !expected) return false;
+  try {
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch { return false; }
+}
+
 export default async function handler(req, res) {
   // Only accept POST
   if (req.method !== 'POST') {
@@ -35,14 +48,16 @@ export default async function handler(req, res) {
   }
 
   // Authenticate
-  const apiKey = req.headers['x-api-key'];
-  if (!apiKey || apiKey !== process.env.INTERNAL_API_KEY) {
+  if (!isValidApiKey(req.headers['x-api-key'], process.env.INTERNAL_API_KEY)) {
     return errorResponse(res, 401, 'Unauthorized');
   }
 
   const { tileId } = req.body || {};
   if (!tileId) {
     return errorResponse(res, 400, 'Missing required field: tileId');
+  }
+  if (!TILE_ID_RE.test(tileId)) {
+    return errorResponse(res, 400, 'Invalid tileId format');
   }
 
   log('request_received', { endpoint: 'generate-tile-pptx', tileId });
@@ -52,8 +67,8 @@ export default async function handler(req, res) {
   try {
     record = await getRecord(TABLE, tileId);
   } catch (err) {
-    log('error', { error: err.message, tileId });
-    return errorResponse(res, 404, `Candidate Tile not found: ${tileId}`);
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 404, 'Candidate Tile not found');
   }
 
   const { fields } = record;
@@ -107,8 +122,8 @@ export default async function handler(req, res) {
       hitchLogoUrl,
     });
   } catch (err) {
-    log('error', { error: err.message, stack: err.stack, tileId });
-    return errorResponse(res, 500, `PPTX generation failed: ${err.message}`);
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, 'PPTX generation failed');
   }
 
   log('pptx_generated', { fileSize: pptxBuffer.length, tileId });
@@ -117,7 +132,7 @@ export default async function handler(req, res) {
   let blobUrl;
   try {
     const { url } = await put(
-      `tiles/${tileId}-${Date.now()}.pptx`,
+      `tiles/${randomUUID()}.pptx`,
       pptxBuffer,
       {
         access: 'public',
@@ -126,8 +141,8 @@ export default async function handler(req, res) {
     );
     blobUrl = url;
   } catch (err) {
-    log('error', { error: err.message, stack: err.stack, tileId });
-    return errorResponse(res, 500, `Failed to upload PPTX to storage: ${err.message}`);
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, 'Failed to upload PPTX to storage');
   }
 
   log('blob_uploaded', { url: blobUrl, tileId });
@@ -138,11 +153,11 @@ export default async function handler(req, res) {
       'Candidate Tile PowerPoint': [{ url: blobUrl }],
     });
   } catch (err) {
-    log('error', { error: err.message, stack: err.stack, tileId });
+    log('error', { error: err.message, blobUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     return errorResponse(
       res,
       500,
-      `PPTX generated but failed to save to Airtable: ${err.message}. File URL: ${blobUrl}`
+      'PPTX generated but failed to save to Airtable'
     );
   }
 

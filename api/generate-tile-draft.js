@@ -9,12 +9,14 @@
  * Body: { "tileId": "recXXXXXXXX" }
  */
 
+import { timingSafeEqual } from 'crypto';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { extractTextFromPdf } from '../lib/pdf-extract.js';
 import { synthesizeCandidateContent } from '../lib/anthropic.js';
 import { log } from '../lib/logger.js';
 
 const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
+const TILE_ID_RE = /^rec[A-Za-z0-9]{14}$/;
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -25,6 +27,17 @@ function errorResponse(res, status, message) {
   });
 }
 
+/** Constant-time API key comparison to prevent timing attacks. */
+function isValidApiKey(provided, expected) {
+  if (!provided || !expected) return false;
+  try {
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch { return false; }
+}
+
 export default async function handler(req, res) {
   // Only accept POST
   if (req.method !== 'POST') {
@@ -32,14 +45,16 @@ export default async function handler(req, res) {
   }
 
   // Authenticate
-  const apiKey = req.headers['x-api-key'];
-  if (!apiKey || apiKey !== process.env.INTERNAL_API_KEY) {
+  if (!isValidApiKey(req.headers['x-api-key'], process.env.INTERNAL_API_KEY)) {
     return errorResponse(res, 401, 'Unauthorized');
   }
 
   const { tileId } = req.body || {};
   if (!tileId) {
     return errorResponse(res, 400, 'Missing required field: tileId');
+  }
+  if (!TILE_ID_RE.test(tileId)) {
+    return errorResponse(res, 400, 'Invalid tileId format');
   }
 
   log('request_received', { endpoint: 'generate-tile-draft', tileId });
@@ -49,8 +64,8 @@ export default async function handler(req, res) {
   try {
     record = await getRecord(TABLE, tileId);
   } catch (err) {
-    log('error', { error: err.message, tileId });
-    return errorResponse(res, 404, `Candidate Tile not found: ${tileId} — ${err.message}`);
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 404, 'Candidate Tile not found');
   }
 
   const { fields } = record;
@@ -117,12 +132,12 @@ export default async function handler(req, res) {
       notes
     );
   } catch (err) {
-    log('error', { error: err.message, stack: err.stack, tileId });
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     // Write error status to Airtable so PM sees it
     await updateRecord(TABLE, tileId, {
       'Tile Draft Status': 'Draft Error',
     }).catch(() => {});
-    return errorResponse(res, 500, `Content synthesis failed: ${err.message}`);
+    return errorResponse(res, 500, 'Content synthesis failed');
   }
 
   log('claude_api_complete', { tileId });
@@ -136,8 +151,8 @@ export default async function handler(req, res) {
       'Tile Draft Status': 'Draft Ready',
     });
   } catch (err) {
-    log('error', { error: err.message, stack: err.stack, tileId });
-    return errorResponse(res, 500, `Failed to save draft to Airtable: ${err.message}`);
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, 'Failed to save draft');
   }
 
   log('airtable_updated', { tileId, candidateName });
