@@ -145,8 +145,10 @@ export default async function handler(req, res) {
   // ── Write draft back to Airtable ─────────────────────────────────────────
   try {
     await updateRecord(TABLE, tileId, {
-      'Relevant Security Experience': synthesized.relevantExperience,
-      'Current Situation': synthesized.currentSituation,
+      'Situation': synthesized.situation,
+      'Relevant Domain Expertise': synthesized.relevantDomainExpertise,
+      'Reasons to Consider': synthesized.reasonsToConsider,
+      'Culture Add': synthesized.cultureAdd,
       'Anticipated Concerns': synthesized.anticipatedConcerns,
       'Tile Draft Status': 'Draft Ready',
     });

@@ -84,18 +84,18 @@ export default async function handler(req, res) {
   }
 
   // ── Extract all fields ────────────────────────────────────────────────────
-  const candidateName    = getFieldValue(fields, 'Candidate Name');
-  const currentTitle     = getFieldValue(fields, 'Current Title');
-  const currentCompany   = getFieldValue(fields, 'Current Company');
-  const location         = getFieldValue(fields, 'Location');
-  const education        = getFieldValue(fields, 'Education');
-  const email            = getFieldValue(fields, 'Email');
-  const phone            = getFieldValue(fields, 'Phone');
-  const relevantExperience = getFieldValue(fields, 'Relevant Security Experience');
-  const currentSituation   = getFieldValue(fields, 'Current Situation');
-  const anticipatedConcerns = getFieldValue(fields, 'Anticipated Concerns');
-  const roleTitle        = getFieldValue(fields, 'Role Title');
-  const clientName       = getFieldValue(fields, 'Client');
+  const candidateName           = getFieldValue(fields, 'Candidate Name');
+  const currentTitle            = getFieldValue(fields, 'Current Title');
+  const currentCompany          = getFieldValue(fields, 'Current Company');
+  const location                = getFieldValue(fields, 'Location');
+  const education               = getFieldValue(fields, 'Education');
+  const email                   = getFieldValue(fields, 'Email');
+  const linkedinUrl             = getFieldValue(fields, 'LinkedIn');
+  const situation               = getFieldValue(fields, 'Situation');
+  const relevantDomainExpertise = getFieldValue(fields, 'Relevant Domain Expertise');
+  const reasonsToConsider       = getFieldValue(fields, 'Reasons to Consider');
+  const cultureAdd              = getFieldValue(fields, 'Culture Add');
+  const anticipatedConcerns     = getFieldValue(fields, 'Anticipated Concerns');
 
   const photoUrl      = getAttachmentUrl(fields, 'Profile Pic');
   const hitchLogoUrl  = process.env.HITCH_LOGO_URL || null;
@@ -112,12 +112,12 @@ export default async function handler(req, res) {
       location,
       education,
       email,
-      phone,
-      relevantExperience,
-      currentSituation,
+      linkedinUrl,
+      situation,
+      relevantDomainExpertise,
+      reasonsToConsider,
+      cultureAdd,
       anticipatedConcerns,
-      roleTitle,
-      clientName,
       photoUrl,
       hitchLogoUrl,
     });
