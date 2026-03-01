@@ -1,6 +1,6 @@
 # Hitch Talent Agent — CLAUDE.md
 
-Internal tool for Hitch Partners. Generates branded candidate tile PowerPoint decks from Airtable data using Claude AI.
+Internal tool for Hitch Partners. Generates branded candidate tile documents (PowerPoint and PDF) from Airtable data using Claude AI.
 
 ---
 
@@ -10,10 +10,14 @@ Internal tool for Hitch Partners. Generates branded candidate tile PowerPoint de
 api/
   generate-tile-draft.js   POST /api/generate-tile-draft  — Claude synthesis → Airtable
   generate-tile-pptx.js    POST /api/generate-tile-pptx   — PPTX generation → Vercel Blob → Airtable
+  generate-tile-pdf.js     POST /api/generate-tile-pdf    — PDF generation → Vercel Blob → Airtable
 lib/
   airtable.js              Airtable REST client (getRecord, updateRecord, getFieldValue, getAttachmentUrl)
   anthropic.js             Claude wrapper — builds prompt, calls API, parses JSON response
+  fetch-image.js           Shared SSRF-guarded image fetcher (imageToBase64, guessMimeType)
+  html-tile.js             Builds the HTML/CSS candidate tile document (for PDF rendering)
   pdf-extract.js           Downloads a PDF URL and extracts text (pdf-parse)
+  pdf-render.js            Puppeteer wrapper — renders HTML string → PDF buffer
   pptx-tile.js             Builds the one-slide PowerPoint (pptxgenjs)
   url-validate.js          SSRF guard — assertSafeUrl() allowlist validator
   logger.js                Structured JSON logger (stdout → Vercel function logs)
@@ -28,9 +32,11 @@ vercel.json                maxDuration: 60s for all api/*.js functions
 - **Node.js 20.x**, **ES modules** (`"type": "module"` in package.json)
 - **Vercel** serverless functions (v2 runtime)
 - `@anthropic-ai/sdk ^0.20.0` — Claude API
-- `@vercel/blob ^0.22.0` — PPTX file storage
+- `@sparticuz/chromium ^143.0.0` — pre-compiled Chromium for Lambda/Vercel (PDF generation)
+- `@vercel/blob ^0.22.0` — file storage (PPTX and PDF)
 - `pdf-parse ^1.1.1` — resume text extraction (CommonJS; dynamic-imported in ESM via `pdf-parse/lib/pdf-parse.js`)
 - `pptxgenjs ^3.12.0` — PowerPoint generation
+- `puppeteer-core ^24.0.0` — headless Chrome for HTML→PDF rendering
 - `node-fetch ^3.3.2`
 
 ---
@@ -46,6 +52,7 @@ vercel.json                maxDuration: 60s for all api/*.js functions
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob token (auto-injected when Blob store is linked) |
 | `INTERNAL_API_KEY` | Shared secret; must match the `x-api-key` header sent by Airtable automations |
 | `HITCH_LOGO_URL` | Public HTTPS URL for the Hitch Partners logo PNG |
+| `CHROME_EXECUTABLE_PATH` | **Local dev only** — path to local Chrome binary (e.g. `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`). Omit in production; Vercel uses `@sparticuz/chromium`. |
 
 ---
 
@@ -55,19 +62,19 @@ Fields read by the app (lookup fields return arrays; `getFieldValue` unwraps the
 
 | Field | Type | Used by |
 |---|---|---|
-| `Candidate Name` | Lookup (Person) | Both endpoints |
-| `Current Title` | Lookup (Person) | Both endpoints |
-| `Current Company` | Lookup (Person) | Both endpoints |
-| `Location` | Lookup (Person) | PPTX endpoint |
-| `Education` | Lookup (Person) | PPTX endpoint |
-| `Email` | Lookup (Person) | PPTX endpoint |
-| `LinkedIn` | Lookup (Person → LinkedIn URL) | PPTX endpoint |
-| `Profile Pic` | Attachment lookup (Person) | PPTX endpoint |
+| `Candidate Name` | Lookup (Person) | All endpoints |
+| `Current Title` | Lookup (Person) | All endpoints |
+| `Current Company` | Lookup (Person) | All endpoints |
+| `Location` | Lookup (Person) | PPTX + PDF endpoints |
+| `Education` | Lookup (Person) | PPTX + PDF endpoints |
+| `Email` | Lookup (Person) | PPTX + PDF endpoints |
+| `LinkedIn` | Lookup (Person → LinkedIn URL) | PPTX + PDF endpoints |
+| `Profile Pic` | Attachment lookup (Person) | PPTX + PDF endpoints |
 | `Resume` | Attachment | Draft endpoint |
 | `Notes` | Long text | Draft endpoint |
 | `Role Title` | Text | Draft endpoint (Claude context) |
 | `Client` | Text | Draft endpoint (Claude context) |
-| `Tile Draft Status` | Single select | Both endpoints (read + write) |
+| `Tile Draft Status` | Single select | All endpoints (read + write) |
 
 Fields **written** by the app:
 
@@ -80,6 +87,7 @@ Fields **written** by the app:
 | `Anticipated Concerns` | Draft endpoint (Claude output) |
 | `Tile Draft Status` | Draft endpoint (`Draft Ready` / `Draft Error`) |
 | `Candidate Tile PowerPoint` | PPTX endpoint (attachment URL array) |
+| `Candidate Tile PDF` | PDF endpoint (attachment URL array) |
 
 **Airtable schema prerequisites** (must be configured in Airtable UI before deploying):
 - Rename `Current Situation` → `Situation` in Candidate Tile table
@@ -87,14 +95,15 @@ Fields **written** by the app:
 - Add `Culture Add` (Long text) to Candidate Tile table
 - Verify/add `Reasons to Consider` (Long text) to Candidate Tile table
 - Add `LinkedIn` (URL) to People table; add Lookup to Candidate Tile table
+- Add `Candidate Tile PDF` (Attachment) to Candidate Tile table
 
-**Tile Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → PPTX generated.
+**Tile Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → PPTX and/or PDF generated.
 
 ---
 
 ## API Endpoints
 
-Both endpoints require:
+All endpoints require:
 - Method: `POST`
 - Header: `x-api-key: <INTERNAL_API_KEY>` (constant-time comparison via `timingSafeEqual`)
 - Body: `{ "tileId": "recXXXXXXXXXXXXXX" }` (validated against `/^rec[A-Za-z0-9]{14}$/`)
@@ -119,6 +128,19 @@ Resume parse failures are non-fatal — draft is still generated with a warning 
 5. Uploads to Vercel Blob (`tiles/<uuid>.pptx`, public access)
 6. Updates Airtable `Candidate Tile PowerPoint` attachment field with the blob URL
 7. Returns `{ status, message, data: { tileId, candidateName, pptxUrl }, warnings }`
+
+### POST /api/generate-tile-pdf
+
+1. Fetches the Candidate Tile record
+2. Validates `Tile Draft Status === 'Approved'`
+3. Downloads logo + profile photo as base64 in parallel (10s timeout each; SSRF-guarded)
+4. Generates a complete HTML document via `lib/html-tile.js` (inline CSS, flexbox layout, data URI images)
+5. Renders HTML → PDF buffer via Puppeteer (`lib/pdf-render.js`) — Letter landscape, 0.5in margins
+6. Uploads to Vercel Blob (`tiles/<uuid>.pdf`, public access)
+7. Updates Airtable `Candidate Tile PDF` attachment field with the blob URL
+8. Returns `{ status, message, data: { tileId, candidateName, pdfUrl }, warnings }`
+
+The PPTX and PDF endpoints are independent — either or both can be triggered for any Approved tile.
 
 ---
 
@@ -174,6 +196,40 @@ One slide, 16:9 (13.333" × 7.5"), white background, Calibri font throughout.
 
 ---
 
+## PDF Layout
+
+Letter landscape (11" × 8.5"), 0.5in margins, Arial/Helvetica font throughout. Generated by Puppeteer (`puppeteer-core` + `@sparticuz/chromium`).
+
+**Key implementation details:**
+- `page.emulateMediaType('print')` called before `setContent()` so `@media print` rules apply during layout (prevents `min-height: 100vh` inflation)
+- Puppeteer `defaultViewport: { width: 1056, height: 816 }` matches Letter landscape at 96dpi
+- All images (photo, logo) embedded as base64 data URIs — no external network requests from Chromium
+- Request interception blocks all non-`data:` URLs for security isolation
+- Local dev: `CHROME_EXECUTABLE_PATH` env var points to system Chrome; uses `LOCAL_CHROME_ARGS` (no Lambda flags)
+- Production: `@sparticuz/chromium` provides the binary and args
+
+**Color palette** (matches PPTX):
+- `NAVY #1B365D` — headings, candidate name, footer background
+- `SLATE #64748B` — body text, contact info
+- `ACCENT #0EA5E9` — header divider line
+- `WHITE #FFFFFF` — background, footer text
+
+**Structure** (flexbox, no fixed heights):
+```
+.page-wrapper  (flex column)
+  .header      (54px, flex row: name | title/company | logo)
+  .body        (flex row, flex:1)
+    .sidebar   (260px fixed width: photo, LinkedIn, Situation, Contact Info, Education)
+    .main      (flex:1: Domain Expertise, Reasons to Consider, Culture Add, Anticipated Concerns)
+  .footer      (30px, position:fixed in print, navy bar + italic text)
+```
+
+**Typography:** 11px body, 1.35 line-height, 10px section labels (uppercase, letter-spaced), 21px candidate name in header.
+
+**Print CSS:** `@page { size: Letter landscape; margin: 0.5in; }`. Footer uses `position: fixed; bottom: 10px` to pin to page bottom. Columns have `padding-bottom: 46px` to prevent content rendering behind the fixed footer.
+
+---
+
 ## Security
 
 - **Authentication:** `x-api-key` header, constant-time comparison (`crypto.timingSafeEqual`)
@@ -182,6 +238,8 @@ One slide, 16:9 (13.333" × 7.5"), white background, Calibri font throughout.
   - `raw.githubusercontent.com` (Hitch logo)
   - `blob.vercel-storage.com` (Vercel Blob)
 - **Prompt injection:** XML delimiters, field sanitization, explicit untrusted-data labeling
+- **HTML injection / XSS:** `escapeHtml()` applied to all Airtable field values before insertion into the HTML template in `lib/html-tile.js`
+- **Puppeteer network isolation:** Request interception blocks all external URLs; only `data:` URIs and `about:blank` pass through
 - **Input validation:** tileId regex, method check, body presence check
 - **Error responses:** Production stack traces suppressed (`NODE_ENV !== 'production'`)
 - **PDF size limit:** 25 MB max before buffering
@@ -194,7 +252,12 @@ One slide, 16:9 (13.333" × 7.5"), white background, Calibri font throughout.
 node dev-server.mjs
 ```
 
-Loads `.env.local`, serves both endpoints at `http://localhost:3000`. No Vercel CLI required.
+Loads `.env.local`, serves all three endpoints at `http://localhost:3000`. No Vercel CLI required.
+
+**Required `.env.local` entry for PDF generation:**
+```
+CHROME_EXECUTABLE_PATH=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+```
 
 **Test draft generation:**
 ```bash
@@ -212,6 +275,14 @@ curl -X POST http://localhost:3000/api/generate-tile-pptx \
   -d '{"tileId": "recXXXXXXXXXXXXXX"}'
 ```
 
+**Test PDF generation** (tile must be `Approved` first):
+```bash
+curl -X POST http://localhost:3000/api/generate-tile-pdf \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <INTERNAL_API_KEY>" \
+  -d '{"tileId": "recXXXXXXXXXXXXXX"}'
+```
+
 ---
 
 ## Deployment
@@ -223,13 +294,15 @@ vercel deploy --prod   # production
 
 Vercel Blob store must be linked to the project (auto-injects `BLOB_READ_WRITE_TOKEN`).
 
+**Bundle size note:** `@sparticuz/chromium` is ~50MB compressed (~180MB unzipped). Total `node_modules` is ~164MB, within Vercel's 250MB function limit.
+
 ---
 
 ## Logging
 
 `lib/logger.js` emits structured JSON to stdout (captured by Vercel function logs).
 
-Standard event names: `request_received`, `airtable_fetch_complete`, `pdf_parse_complete`, `pdf_parse_failed`, `claude_api_called`, `claude_api_complete`, `pptx_generated`, `blob_uploaded`, `airtable_updated`, `error`.
+Standard event names: `request_received`, `airtable_fetch_complete`, `pdf_parse_complete`, `pdf_parse_failed`, `claude_api_called`, `claude_api_complete`, `pptx_generated`, `pdf_generated`, `blob_uploaded`, `airtable_updated`, `error`.
 
 ---
 
@@ -248,9 +321,11 @@ The `airtable.js` client retries on HTTP 429 with exponential backoff: 1s → 2s
 | Tile not found | 404 | Candidate Tile not found |
 | No linked Person (no Candidate Name) | 400 | Candidate Tile must be linked to a Person record |
 | Status = Approved (draft endpoint) | 400 | Cannot overwrite approved content... |
-| Status ≠ Approved (PPTX endpoint) | 400 | Cannot generate PowerPoint: draft status is '...' |
+| Status ≠ Approved (PPTX/PDF endpoint) | 400 | Cannot generate PowerPoint/PDF: draft status is '...' |
 | Claude API failure | 500 | Content synthesis failed |
+| HTML generation failure | 500 | HTML generation failed |
 | PPTX generation failure | 500 | PPTX generation failed |
-| Blob upload failure | 500 | Failed to upload PPTX to storage |
-| Airtable save failure | 500 | Failed to save draft / PPTX generated but failed to save to Airtable |
+| PDF generation failure | 500 | PDF generation failed |
+| Blob upload failure | 500 | Failed to upload PPTX/PDF to storage |
+| Airtable save failure | 500 | Failed to save draft / PPTX/PDF generated but failed to save to Airtable |
 | Resume parse failure | 200 + warning | Draft still generated; warning in response |
