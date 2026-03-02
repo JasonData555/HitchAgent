@@ -15,14 +15,18 @@ for (const line of env.split('\n')) {
 }
 
 // ── Dynamically import handlers ────────────────────────────────────────────
-const { default: pptxHandler }  = await import('./api/generate-tile-pptx.js');
-const { default: draftHandler } = await import('./api/generate-tile-draft.js');
-const { default: pdfHandler }   = await import('./api/generate-tile-pdf.js');
+const { default: pptxHandler }         = await import('./api/generate-tile-pptx.js');
+const { default: draftHandler }        = await import('./api/generate-tile-draft.js');
+const { default: pdfHandler }          = await import('./api/generate-tile-pdf.js');
+const { default: rubricDraftHandler }  = await import('./api/generate-rubric-draft.js');
+const { default: rubricPdfHandler }    = await import('./api/generate-rubric-pdf.js');
 
 const ROUTES = {
-  '/api/generate-tile-pptx':  pptxHandler,
-  '/api/generate-tile-draft': draftHandler,
-  '/api/generate-tile-pdf':   pdfHandler,
+  '/api/generate-tile-pptx':   pptxHandler,
+  '/api/generate-tile-draft':  draftHandler,
+  '/api/generate-tile-pdf':    pdfHandler,
+  '/api/generate-rubric-draft': rubricDraftHandler,
+  '/api/generate-rubric-pdf':   rubricPdfHandler,
 };
 
 // ── HTTP server ────────────────────────────────────────────────────────────
