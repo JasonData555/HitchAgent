@@ -147,6 +147,7 @@ export default async function handler(req, res) {
     await updateRecord(TABLE, tileId, {
       'Situation': synthesized.situation,
       'Relevant Domain Expertise': synthesized.relevantDomainExpertise,
+      'Reasons to Consider': synthesized.reasonsToConsider,
       'Culture Add': synthesized.cultureAdd,
       'Anticipated Concerns': synthesized.anticipatedConcerns,
       'Tile Draft Status': 'Draft Ready',
