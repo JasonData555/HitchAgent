@@ -113,6 +113,7 @@ export default async function handler(req, res) {
     pdfBuffer = await createRubricPdf({
       clientName:        matrixJson.clientName || clientName,
       searchName:        matrixJson.searchName || '',
+      contextRows:       matrixJson.contextRows || [],
       panelMembers:      matrixJson.panelMembers || [],
       domains:           matrixJson.domains || [],
       conflicts:         matrixJson.conflicts || [],

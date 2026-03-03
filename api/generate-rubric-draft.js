@@ -149,10 +149,12 @@ export default async function handler(req, res) {
       scores[domain] = getFieldValue(f, domain, '');
     }
     return {
-      name:      getFieldValue(f, 'panel_member', ''),
-      title:     getFieldValue(f, 'panel_member_title', ''),
-      reportsTo: getFieldValue(f, 'Reports To', ''),
-      notes:     getFieldValue(f, 'Notes', ''),
+      name:             getFieldValue(f, 'panel_member', ''),
+      title:            getFieldValue(f, 'panel_member_title', ''),
+      reportsTo:        getFieldValue(f, 'Reports To', ''),
+      teamSizeToday:    getFieldValue(f, 'team_size_today', ''),
+      teamSize18Months: getFieldValue(f, 'team_size_18months', ''),
+      notes:            getFieldValue(f, 'Notes', ''),
       scores,
     };
   });
@@ -218,11 +220,18 @@ export default async function handler(req, res) {
   const matrixJson = {
     clientName,
     searchName,
+    contextRows: [
+      { label: 'Position reports to',         field: 'reportsTo'        },
+      { label: 'Current team size',           field: 'teamSizeToday'    },
+      { label: 'Est. team size in 18 months', field: 'teamSize18Months' },
+    ],
     panelMembers: panelMembers.map((pm) => ({
-      name:      pm.name,
-      title:     pm.title,
-      reportsTo: pm.reportsTo,
-      scores:    Object.fromEntries(activeDomains.map((d) => [d, pm.scores[d] || ''])),
+      name:             pm.name,
+      title:            pm.title,
+      reportsTo:        pm.reportsTo,
+      teamSizeToday:    pm.teamSizeToday,
+      teamSize18Months: pm.teamSize18Months,
+      scores:           Object.fromEntries(activeDomains.map((d) => [d, pm.scores[d] || ''])),
     })),
     domains:   activeDomains,
     conflicts: conflictDomains,
