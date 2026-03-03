@@ -41,7 +41,6 @@ const DOMAIN_FIELDS = [
   'Cloud Security',
   'Security Operations',
   'External Communication',
-  'Team Bldg and Leadership',
 ];
 
 function errorResponse(res, status, message) {
