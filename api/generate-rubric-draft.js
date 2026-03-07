@@ -153,6 +153,7 @@ export default async function handler(req, res) {
       reportsTo:        getFieldValue(f, 'Reports To', ''),
       teamSizeToday:    getFieldValue(f, 'team_size_today', ''),
       teamSize18Months: getFieldValue(f, 'team_size_18months', ''),
+      location:         getFieldValue(f, 'Location', ''),
       notes:            getFieldValue(f, 'Notes', ''),
       scores,
     };
@@ -183,10 +184,10 @@ export default async function handler(req, res) {
       .map((pm) => ({ name: pm.name, title: pm.title, score: pm.scores[domain] })),
   }));
 
-  // Combined notes from all panel members (for Claude context)
-  const combinedNotes = panelMembers
-    .map((pm) => pm.notes)
-    .filter(Boolean)
+  // Notes attributed per panel member (for Claude context)
+  const attributedNotes = panelMembers
+    .filter((pm) => pm.notes)
+    .map((pm) => `${pm.name}:\n${pm.notes}`)
     .join('\n\n');
 
   // Panel data for Claude (active domains only, no internal notes field)
@@ -205,7 +206,7 @@ export default async function handler(req, res) {
       clientName,
       panelDataForClaude,
       conflictDetails,
-      combinedNotes
+      attributedNotes
     );
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
@@ -223,6 +224,7 @@ export default async function handler(req, res) {
       { label: 'Position reports to',         field: 'reportsTo'        },
       { label: 'Current team size',           field: 'teamSizeToday'    },
       { label: 'Est. team size in 18 months', field: 'teamSize18Months' },
+      { label: 'Location',                    field: 'location'         },
     ],
     panelMembers: panelMembers.map((pm) => ({
       name:             pm.name,
@@ -230,6 +232,7 @@ export default async function handler(req, res) {
       reportsTo:        pm.reportsTo,
       teamSizeToday:    pm.teamSizeToday,
       teamSize18Months: pm.teamSize18Months,
+      location:         pm.location,
       scores:           Object.fromEntries(activeDomains.map((d) => [d, pm.scores[d] || ''])),
     })),
     domains:   activeDomains,
