@@ -19,7 +19,7 @@ lib/
   fetch-image.js           Shared SSRF-guarded image fetcher (imageToBase64, guessMimeType)
   html-tile.js             Builds the HTML/CSS candidate tile document (for PDF rendering)
   pdf-extract.js           Downloads a PDF URL and extracts text (pdf-parse)
-  pdf-render.js            Puppeteer wrapper — renders HTML string → PDF buffer
+  pdf-render.js            Puppeteer wrapper — renders HTML string → PDF buffer; accepts { landscape, bottomMargin } options
   pdf-rubric.js            Builds the HTML/CSS rubric alignment document (for PDF rendering)
   pptx-tile.js             Builds the one-slide PowerPoint (pptxgenjs)
   url-validate.js          SSRF guard — assertSafeUrl() allowlist validator
@@ -152,9 +152,9 @@ Fields read by the rubric draft endpoint (fetched via `filterByFormula` matching
 | `Cloud Security` | Number/Text | Domain score |
 | `Security Operations` | Number/Text | Domain score |
 | `External Communication` | Number/Text | Domain score |
-| `Team Bldg and Leadership` | Number/Text | Domain score |
+| `Location` | Text | Panel member location (displayed in top data block of rubric PDF) |
 
-Scores are numeric 1–5 (or N/A). A domain is a **conflict** when ≥2 panel members scored it and the spread (max − min) is ≥ 2.
+Scores are numeric 1–5 (or text labels: "Must have"=5, "Important to have"=4, "Nice to have"=3, "Low Priority"=2, "Not important to have"=1, or N/A). A domain is a **conflict** when ≥2 panel members scored it and the spread (max − min) is ≥ 2.
 
 ---
 
@@ -206,7 +206,7 @@ The PPTX and PDF endpoints are independent — either or both can be triggered f
 3. Fetches all linked ITI Input records via formula query: `{search_project} = "<searchName>"`; requires ≥ 2 panel members
 4. Parses scores for all 12 security leadership domains per panel member
 5. Identifies conflicts: domains where ≥ 2 panel members scored it and max − min spread ≥ 2
-6. Calls Claude (`claude-haiku-4-5-20251001`, max 400 tokens) to generate a 2–3 sentence executive conflict narrative (Board-level audience, role-based references, constructive framing)
+6. Calls Claude (`claude-sonnet-4-6`, max 800 tokens) to generate a 3–5 sentence senior-recruiter conflict narrative (names interviewers for disagreements, surfaces note themes, flags score/commentary tension)
 7. Writes `Rubric Matrix JSON`, `Conflict Narrative`, and `Rubric Draft Status: Draft Ready` back to Airtable
 8. Returns `{ status, message, data: { rubricId, clientName, panelMemberCount, domainsIncluded, conflictsFound }, warnings }`
 
@@ -217,7 +217,7 @@ The PPTX and PDF endpoints are independent — either or both can be triggered f
 3. Parses `Rubric Matrix JSON` (must be valid JSON)
 4. Downloads Hitch logo + optional client logo as base64 in parallel (10s timeout each; SSRF-guarded); missing logos fall back silently to text labels
 5. Generates HTML document via `lib/pdf-rubric.js` (inline CSS, dynamic column/font sizing, data URI images, conflict indicators)
-6. Renders HTML → PDF buffer via Puppeteer (`lib/pdf-render.js`) — Letter portrait, 0.5in margins
+6. Renders HTML → PDF buffer via Puppeteer (`lib/pdf-render.js`) — Letter landscape, 0.5in top/sides, 0.1in bottom margin
 7. Uploads to Vercel Blob (`rubrics/<rubricId>-<timestamp>.pdf`, public access)
 8. Updates Airtable `Rubric PDF` attachment field with the blob URL
 9. Returns `{ status, message, data: { rubricId, clientName, pdfUrl }, warnings }`
@@ -237,11 +237,13 @@ The PPTX and PDF endpoints are independent — either or both can be triggered f
 
 **Response format (tile draft):** JSON with keys `situation`, `relevantDomainExpertise`, `reasonsToConsider`, `cultureAdd`, `anticipatedConcerns` (all strings). Markdown code fences are stripped before parsing.
 
-**Rubric narrative generation:** Separate `generateRubricNarrative()` export in `lib/anthropic.js`. Calls `callClaudeForText()` (plain-text response, no JSON parsing). Returns a 2–3 sentence executive summary. Prompt instructions:
-- Refer to panel members by role (e.g., "the CEO"), not by name
-- Frame conflicts constructively as "areas warranting further discussion"
-- Write for a Board-level audience
-- Do not be alarmist about conflicts
+**Rubric narrative generation:** Separate `generateRubricNarrative()` export in `lib/anthropic.js`. Uses `claude-sonnet-4-6`, max 800 tokens. Calls `callClaudeForText()` (plain-text, no JSON). Returns a 3–5 sentence paragraph. Prompt instructions:
+- Write for a **senior recruiter** audience preparing for a client debrief
+- Describe where interviewers were in strong alignment (scores + note themes)
+- Name interviewers when describing meaningful disagreement or specific perspectives
+- Surface themes appearing across multiple interviewers' notes
+- Flag tension between high scores and qualifying commentary
+- Notes passed to Claude are attributed per interviewer (`Name:\nnotes`)
 
 ---
 
@@ -286,13 +288,15 @@ One slide, 16:9 (13.333" × 7.5"), white background, Calibri font throughout.
 
 Letter landscape (11" × 8.5"), 0.5in margins, Arial/Helvetica font throughout. Generated by Puppeteer (`puppeteer-core` + `@sparticuz/chromium`).
 
-**Key implementation details:**
+**Key implementation details (`lib/pdf-render.js`):**
+- `renderHtmlToPdf(htmlString, { landscape = false, bottomMargin = '0.5in' } = {})` — `bottomMargin` defaults to `'0.5in'`; rubric passes `'0.1in'`
 - `page.emulateMediaType('print')` called before `setContent()` so `@media print` rules apply during layout (prevents `min-height: 100vh` inflation)
-- Puppeteer `defaultViewport: { width: 1056, height: 816 }` matches Letter landscape at 96dpi
+- Puppeteer `defaultViewport`: landscape → `{ width: 1056, height: 816 }`, portrait → `{ width: 816, height: 1056 }` (Letter at 96dpi)
 - All images (photo, logo) embedded as base64 data URIs — no external network requests from Chromium
 - Request interception blocks all non-`data:` URLs for security isolation
 - Local dev: `CHROME_EXECUTABLE_PATH` env var points to system Chrome; uses `LOCAL_CHROME_ARGS` (no Lambda flags)
 - Production: `@sparticuz/chromium` provides the binary and args
+- **Fixed positioning note:** `position: fixed; bottom: Xpx` in Puppeteer print mode is relative to the content area (physical height − top margin − bottom margin), not the full viewport. This matters for footer placement calculations.
 
 **Color palette** (matches PPTX):
 - `NAVY #1B365D` — headings, candidate name, footer background
@@ -312,50 +316,65 @@ Letter landscape (11" × 8.5"), 0.5in margins, Arial/Helvetica font throughout. 
 
 **Typography:** 11px body, 1.35 line-height, 10px section labels (uppercase, letter-spaced), 21px candidate name in header.
 
+**Domain Expertise rendering (`expertiseToHtml()`):** Company header lines (e.g. `Coinbase (2016 - present): ...`) render bold navy. Claude emits `Role:`, `Scope:`, `Accomplishments:` as bullet lines (`• Role: ...`); the parser detects these inside the bullet branch (after stripping the bullet prefix) and renders them as `<p><strong>Label:</strong> rest</p>`. Accomplishment bullets (`○ ...`) following an `Accomplishments:` label get class `accomplishments-list` for deeper indent (28px vs 16px).
+
+**Culture Add** renders inline (label + value on same line) via `.inline-section.inline-row` flex modifier. **Anticipated Concerns** renders as a bulleted list (semicolon-delimited items → `<ul class="concerns-list"><li>`).
+
 **Print CSS:** `@page { size: Letter landscape; margin: 0.5in; }`. Footer uses `position: fixed; bottom: 10px` to pin to page bottom. Columns have `padding-bottom: 46px` to prevent content rendering behind the fixed footer.
 
 ---
 
 ## Rubric PDF Layout
 
-Letter portrait (8.5" × 11"), 0.5in margins. Generated by Puppeteer. Defined in `lib/pdf-rubric.js`.
+Letter **landscape** (11" × 8.5"), 0.5in top/sides + 0.1in bottom margin. Generated by Puppeteer. Defined in `lib/pdf-rubric.js`. Calls `renderHtmlToPdf(html, { landscape: true, bottomMargin: '0.1in' })`.
 
 **Color palette** (matches Candidate Tile):
-- `NAVY #1B365D` — headings, domain names, footer background
+- `NAVY #1B365D` — headings, domain names, table headers
 - `SLATE #64748B` — body text, narrative
 - `ACCENT #0EA5E9` — header divider line, footer bar
 - `WHITE #FFFFFF` — background, footer text
 - `RED #DC2626` — conflict indicator circle ("!")
-- Score cells: teal/cyan/gray/red gradient based on score value (5 = Must Have → 1 = Not Important)
+- Score cells: teal/cyan/gray/red gradient (5 = Must Have → 1 = Not Important)
 
-**Dynamic sizing** based on panel member count:
+**Dynamic sizing** based on panel member count (n):
 
-| Members | Header font | Score font | Title font | Domain col width |
+| n | Header font | Score font | Title font | Domain col (left) |
 |---|---|---|---|---|
-| ≤ 3 | 11px | 10px | 9px | standard |
-| 4 | 10px | 9px | 8px | standard |
-| 5 | 9px | 8px | 7.5px | narrowed |
+| ≤ 3 | 11px | 10px | 9px | 150px |
+| 4 | 10px | 9px | 8px | 150px |
+| ≥ 5 | 9px | 8px | 7.5px | 130px |
 
-**HTML structure:**
+**HTML structure (landscape two-column):**
 ```
-.page-wrapper  (flex column)
-  .header      (52px, flex row: Hitch logo | "Role Requirements Alignment" title | client logo)
-  .client-name (subtitle below header line)
-  .matrix-table (domain × panel-member grid)
-    - Active domains only (domains with ≥1 non-N/A score)
-    - Red "!" conflict indicator for domains with ≥2 point spread
-    - "First L." name format in column headers
-  .legend      (conflict icon explanation + score color key)
-  .alignment-summary (Claude-generated conflict narrative)
-  .footer      (fixed, Navy bar + "Hitch Partners <> Confidential & Proprietary")
+Section A: .header        (flex row: Hitch logo | "Role Requirements Alignment" | client logo)
+           .accent-line   (3px blue)
+Section B: .top-data-table (full width, 960px)
+             - Panel member columns (B_LABEL_W=180px, B_PANEL_W=floor((960-180)/n))
+             - Context rows: Position reports to, Current team size,
+               Est. team size in 18 months, Location
+Section C: .two-col        (flex row, gap 10px)
+  .col-left  (62%, ~595px):
+    .matrix-table  (DOMAIN_W + n×PANEL_W + CONFLICT_W=30px)
+    .legend        (conflict icon note + score color key)
+  .col-right (38%):
+    .priority-section × 3 (Must Have avg≥4.0 / Nice to Have 3.0–3.9 / Not Important <3.0)
+      - Domains sorted descending by average score within each tier
+Section D: .divider + .summary-title "CONFLICT NARRATIVE" + .narrative
+Footer:    position:fixed; bottom:10px; height:26px; blue ACCENT bar
 ```
+
+**Column width formulas:**
+- Section B: `B_LABEL_W=180`, `B_PANEL_W=floor((960-180)/n)`
+- Section C left (595px): `DOMAIN_W=n>=5?130:150`, `CONFLICT_W=30`, `PANEL_W=floor((595-DOMAIN_W-30)/n)`
+
+**Footer positioning:** `position: fixed; bottom: 10px` is content-area-relative. With 0.1in bottom margin, content area = 758px; footer sits at y: 722–748px. `padding-bottom: 36px` on `.page-wrapper` ensures content ends at 722px (no overlap). White space below footer ≈ 10px (the bottom margin).
 
 **Key implementation details:**
-- Only domains where ≥1 panel member provided a score appear in the table (all-N/A domains are hidden)
-- Panel member column headers use "First L." format (first name + last initial), falling back to full name or "Panel Member"
-- `Rubric Matrix JSON` stored as pretty-printed JSON with structure: `{ activeDomains, panelMembers, scores, conflicts }`
-- Formula escaping: ITI Input records fetched via `{search_project} = "{value}"` with `"` and `\` escaped in the search value
-- Logos: both Hitch and client logos embedded as base64; missing logos fall back to text labels (soft failure)
+- `parseScoreNum()` handles both numeric strings ("5 - Must have") and plain text labels via `TEXT_SCORE_MAP`
+- `calcDomainAverages()` drives the priority section tiers
+- `Rubric Matrix JSON` structure: `{ activeDomains, panelMembers[{name,title,reportsTo,teamSizeToday,teamSize18Months,location,scores}], contextRows, conflicts }`
+- Panel member column headers use "First L." format
+- Logos embedded as base64; missing logos fall back to text labels (soft failure)
 - Same Puppeteer request-interception security model as Candidate Tile PDF
 
 ---
