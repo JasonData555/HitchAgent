@@ -134,7 +134,7 @@ export default async function handler(req, res) {
   // ── Render HTML to PDF ────────────────────────────────────────────────────
   let pdfBuffer;
   try {
-    pdfBuffer = await renderHtmlToPdf(htmlString);
+    pdfBuffer = await renderHtmlToPdf(htmlString, { bottomMargin: '0.1in' });
   } catch (err) {
     log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     return errorResponse(res, 500, 'PDF generation failed');
