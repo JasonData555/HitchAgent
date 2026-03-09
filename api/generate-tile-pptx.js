@@ -89,6 +89,7 @@ export default async function handler(req, res) {
   const currentCompany          = getFieldValue(fields, 'Current Company');
   const location                = getFieldValue(fields, 'Location');
   const education               = getFieldValue(fields, 'Education');
+  const institution             = getFieldValue(fields, 'Institution');
   const email                   = getFieldValue(fields, 'Email');
   const linkedinUrl             = getFieldValue(fields, 'LinkedIn');
   const situation               = getFieldValue(fields, 'Situation');
@@ -110,6 +111,7 @@ export default async function handler(req, res) {
       currentCompany,
       location,
       education,
+      institution,
       email,
       linkedinUrl,
       situation,

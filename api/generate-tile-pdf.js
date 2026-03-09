@@ -92,6 +92,7 @@ export default async function handler(req, res) {
   const currentCompany          = getFieldValue(fields, 'Current Company');
   const location                = getFieldValue(fields, 'Location');
   const education               = getFieldValue(fields, 'Education');
+  const institution             = getFieldValue(fields, 'Institution');
   const email                   = getFieldValue(fields, 'Email');
   const linkedinUrl             = getFieldValue(fields, 'LinkedIn');
   const situation               = getFieldValue(fields, 'Situation');
@@ -114,6 +115,7 @@ export default async function handler(req, res) {
       currentCompany,
       location,
       education,
+      institution,
       email,
       linkedinUrl,
       situation,
@@ -163,6 +165,7 @@ export default async function handler(req, res) {
   try {
     await updateRecord(TABLE, tileId, {
       'Candidate Tile PDF': [{ url: blobUrl }],
+      'tile_url': blobUrl,
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
