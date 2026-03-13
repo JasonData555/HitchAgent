@@ -32,6 +32,7 @@ const RUBRIC_ID_RE = /^rec[A-Za-z0-9]{14}$/;
 const DOMAIN_FIELDS = [
   'Manage IT',
   'ProdSec_AppSec',
+  'AI Security',
   'GRC',
   'Security Architecture',
   'Network and Infrastructure Security',
