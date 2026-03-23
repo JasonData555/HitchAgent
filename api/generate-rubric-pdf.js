@@ -147,10 +147,11 @@ export default async function handler(req, res) {
 
   log('blob_uploaded', { url: blobUrl, rubricId });
 
-  // ── Update Airtable attachment field ──────────────────────────────────────
+  // ── Update Airtable attachment field + plain-text URL ────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
       'Rubric PDF': [{ url: blobUrl }],
+      'rubric_url': blobUrl,
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
@@ -161,7 +162,7 @@ export default async function handler(req, res) {
     );
   }
 
-  log('airtable_updated', { field: 'Rubric PDF', rubricId });
+  log('airtable_updated', { fields: ['Rubric PDF', 'rubric_url'], rubricId });
 
   return res.status(200).json({
     status:  'success',

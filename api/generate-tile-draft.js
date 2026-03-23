@@ -10,12 +10,13 @@
  */
 
 import { timingSafeEqual } from 'crypto';
-import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
+import { getRecord, updateRecord, getFieldValue, getAttachmentUrl, getRecordsByFormula } from '../lib/airtable.js';
 import { extractTextFromPdf } from '../lib/pdf-extract.js';
 import { synthesizeCandidateContent } from '../lib/anthropic.js';
 import { log } from '../lib/logger.js';
 
-const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
+const TABLE        = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
+const RUBRIC_TABLE = process.env.RUBRIC_TABLE_ID   || 'Rubric';
 const TILE_ID_RE = /^rec[A-Za-z0-9]{14}$/;
 
 function errorResponse(res, status, message) {
@@ -99,6 +100,32 @@ export default async function handler(req, res) {
 
   const notes = getFieldValue(fields, 'Notes', '');
 
+  // ── Rubric Matrix JSON lookup (optional) ─────────────────────────────────
+  // Follows the Project → Rubric join: Candidate Tile.Project (linked record)
+  // is the same Search record linked from Rubric.Client.
+  // Falls back to null if the tile has no Project, no linked Rubric, or the
+  // Rubric has no matrix JSON — tile draft is still generated without Rubric context.
+  let rubricMatrixJson = null;
+  try {
+    const projectRecordId = Array.isArray(fields['Project'])
+      ? fields['Project'][0]
+      : fields['Project'];
+
+    if (projectRecordId) {
+      const rubricRecords = await getRecordsByFormula(
+        RUBRIC_TABLE,
+        `FIND("${projectRecordId}", ARRAYJOIN({Client}, ",")) > 0`
+      );
+      const rawJson = rubricRecords[0]?.fields?.['Rubric Matrix JSON'];
+      if (rawJson) {
+        rubricMatrixJson = JSON.parse(rawJson);
+      }
+    }
+  } catch {
+    // Non-fatal: proceed without Rubric context if lookup or parse fails
+    rubricMatrixJson = null;
+  }
+
   // ── Resume extraction ────────────────────────────────────────────────────
   const warnings = [];
   let resumeText = '';
@@ -129,7 +156,8 @@ export default async function handler(req, res) {
       candidateData,
       roleContext,
       resumeText,
-      notes
+      notes,
+      rubricMatrixJson
     );
   } catch (err) {
     log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });

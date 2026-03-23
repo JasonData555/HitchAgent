@@ -108,6 +108,8 @@ Fields **written** by the app:
 
 **Tile Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → PPTX and/or PDF generated.
 
+**Rubric-aware tile drafts:** The draft endpoint optionally fetches the linked Rubric Matrix JSON for the associated Search. The join path is `Candidate Tile.Project` (linked record) → Search record ← `Rubric.Client` (linked record). If a Rubric with a populated `Rubric Matrix JSON` is found, it is passed to Claude as context to calibrate emphasis in Relevant Domain Expertise and Anticipated Concerns. If no linked Rubric exists or the JSON is empty, the draft is generated using candidate data alone (graceful degradation, no error).
+
 ---
 
 ## Airtable Schema — "Rubric" Table
@@ -129,8 +131,12 @@ Fields **written** by the rubric endpoints:
 | `Conflict Narrative` | Draft endpoint (Claude-generated 2–3 sentence summary) |
 | `Rubric Draft Status` | Draft endpoint (`Draft Ready` / `Draft Error`) |
 | `Rubric PDF` | PDF endpoint (attachment URL array) |
+| `rubric_url` | PDF endpoint (plain text URL string) |
 
 **Rubric Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → PDF generated.
+
+**Rubric schema prerequisites** (must be configured in Airtable UI):
+- Add `rubric_url` (URL or Text) to Rubric table
 
 ---
 
