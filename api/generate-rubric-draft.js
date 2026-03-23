@@ -154,7 +154,7 @@ export default async function handler(req, res) {
       reportsTo:        getFieldValue(f, 'Reports To', ''),
       teamSizeToday:    getFieldValue(f, 'team_size_today', ''),
       teamSize18Months: getFieldValue(f, 'team_size_18months', ''),
-      location:         getFieldValue(f, 'Location', ''),
+      location:         getFieldValue(f, 'Location Requirement', ''),
       notes:            getFieldValue(f, 'Notes', ''),
       scores,
     };

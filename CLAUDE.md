@@ -162,7 +162,7 @@ Fields read by the rubric draft endpoint (fetched via `filterByFormula` matching
 | `Cloud Security` | Number/Text | Domain score |
 | `Security Operations` | Number/Text | Domain score |
 | `External Communication` | Number/Text | Domain score |
-| `Location` | Text | Panel member location (displayed in top data block of rubric PDF) |
+| `Location Requirement` | Text | Panel member location requirement (displayed in top data block of rubric PDF) |
 
 Scores are numeric 1–5 (or text labels: "Must have"=5, "Important to have"=4, "Nice to have"=3, "Low Priority"=2, "Not important to have"=1, or N/A). A domain is a **conflict** when ≥2 panel members scored it and the spread (max − min) is ≥ 2.
 
