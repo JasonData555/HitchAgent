@@ -287,7 +287,7 @@ One slide, 16:9 (13.333" × 7.5"), white background, Calibri font throughout.
 **Right column (x=3.8, w=9.0"):**
 - RELEVANT DOMAIN EXPERTISE (12pt bold) at y:0.9; content at y:1.15 with blue/bold company headers
 - REASONS TO CONSIDER (10pt bold) at y:5.0; bullet content at y:5.2
-- CULTURE ADD: {val} (inline bold label + regular value) at y:5.8
+- CULTURE ADD: {val} (inline bold label + regular value) at y:5.8 — PPTX only; PDF renders Culture Add in the sidebar
 - ANTICIPATED CONCERNS: {val} (inline bold label + regular value) at y:6.1
 
 **Footer (y: 7.1"–7.45"):**
@@ -321,8 +321,8 @@ Letter portrait (8.5" × 11"), 0.5in top/sides + 0.1in bottom margin, Arial/Helv
 .page-wrapper  (flex column)
   .header      (54px, flex row: name | title/company | logo)
   .body        (flex row, flex:1)
-    .sidebar   (260px fixed width: photo, LinkedIn, Situation, Contact Info, Education + Institution)
-    .main      (flex:1: Domain Expertise, Reasons to Consider, Culture Add, Anticipated Concerns)
+    .sidebar   (240px fixed width: photo, LinkedIn, Situation, Culture Add, Contact Info, Education + Institution)
+    .main      (flex:1: Domain Expertise, Reasons to Consider, Anticipated Concerns)
   .footer      (30px, position:fixed in print, navy bar + italic text)
 ```
 
@@ -330,9 +330,11 @@ Letter portrait (8.5" × 11"), 0.5in top/sides + 0.1in bottom margin, Arial/Helv
 
 **Domain Expertise rendering (`expertiseToHtml()`):** Company header lines (e.g. `Coinbase (2016 - present): ...`) render bold navy. Claude emits `Role:`, `Scope:`, `Accomplishments:` as bullet lines (`• Role: ...`); the parser detects these inside the bullet branch (after stripping the bullet prefix) and renders them as `<p><strong>Label:</strong> rest</p>`. Accomplishment bullets (`○ ...`) following an `Accomplishments:` label get class `accomplishments-list` for deeper indent (28px vs 16px).
 
-**Culture Add** renders inline (label + value on same line) via `.inline-section.inline-row` flex modifier. **Anticipated Concerns** renders as a bulleted list (semicolon-delimited items → `<ul class="concerns-list"><li>`).
+**Culture Add** renders in the sidebar as a standard `.section` block (label + body), directly below Situation. **Anticipated Concerns** renders in the main column as a bulleted list (semicolon-delimited items → `<ul class="concerns-list"><li>`), directly below Reasons to Consider.
 
-**Print CSS:** `@page { size: Letter portrait; margin: 0.5in 0.5in 0.1in 0.5in; }` (must match `page.pdf()` margins in `pdf-render.js`). Footer uses `position: fixed; bottom: 10px` to pin near page bottom. Columns have `padding-bottom: 46px` to prevent content rendering behind the fixed footer.
+**Unicode arrows** (`→`, `←`, `↑`, `↓`) in Claude-generated text are replaced with word equivalents (`to`, `from`, `up`, `down`) via `replaceArrows()` before HTML encoding — the Lambda Chromium bundle lacks full Unicode Arrows block font coverage.
+
+**Print CSS:** `@page { size: Letter portrait; margin: 0.5in 0.5in 0.1in 0.5in; }` (must match `page.pdf()` margins in `pdf-render.js`). Footer uses `position: fixed; bottom: 10px` to pin near page bottom. Columns have `padding-bottom: 46px` to prevent content rendering behind the fixed footer. Reasons to Consider and Anticipated Concerns sections have `break-inside: avoid` to prevent them from splitting across a page boundary (entire section moves to page 2 if it would overlap the footer zone).
 
 ---
 
