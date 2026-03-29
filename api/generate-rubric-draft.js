@@ -240,12 +240,49 @@ export default async function handler(req, res) {
     conflicts: conflictDomains,
   };
 
+  // ── Compute priority tiers for new Airtable fields ───────────────────────
+  const _TEXT_SCORE_MAP = {
+    'must have': 5, 'important to have': 4, 'nice to have': 3,
+    'low priority': 2, 'not important to have': 1,
+  };
+  function _parseScoreNum(raw) {
+    if (!raw || raw === 'N/A') return null;
+    const n = parseInt(String(raw), 10);
+    if (!isNaN(n)) return n;
+    return _TEXT_SCORE_MAP[String(raw).toLowerCase().trim()] ?? null;
+  }
+
+  const domainAvgs = {};
+  for (const domain of matrixJson.domains) {
+    const scores = matrixJson.panelMembers
+      .map(pm => _parseScoreNum(pm.scores[domain]))
+      .filter(s => s !== null);
+    if (scores.length > 0) {
+      domainAvgs[domain] = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
+    }
+  }
+
+  const mustHaveDomains = matrixJson.domains
+    .filter(d => (domainAvgs[d] ?? -1) >= 4.0)
+    .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
+
+  const niceToHaveDomains = matrixJson.domains
+    .filter(d => (domainAvgs[d] ?? -1) >= 3.0 && (domainAvgs[d] ?? -1) < 4.0)
+    .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
+
+  const notImportantDomains = matrixJson.domains
+    .filter(d => domainAvgs[d] !== undefined && (domainAvgs[d] ?? -1) < 3.0)
+    .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
+
   // ── Write back to Airtable ────────────────────────────────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
-      'Rubric Matrix JSON': JSON.stringify(matrixJson, null, 2),
-      'Conflict Narrative': narrative,
-      'Rubric Draft Status':      'Draft Ready',
+      'Rubric Matrix JSON':  JSON.stringify(matrixJson, null, 2),
+      'Conflict Narrative':  narrative,
+      'Rubric Draft Status': 'Draft Ready',
+      'Must Have':           mustHaveDomains.length     > 0 ? mustHaveDomains.join(', ')     : 'None',
+      'Nice to Have':        niceToHaveDomains.length   > 0 ? niceToHaveDomains.join(', ')   : 'None',
+      'Not Important':       notImportantDomains.length > 0 ? notImportantDomains.join(', ') : 'None',
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });

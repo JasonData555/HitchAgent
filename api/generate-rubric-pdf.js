@@ -104,6 +104,9 @@ export default async function handler(req, res) {
   const conflictNarrative = getFieldValue(fields, 'Conflict Narrative', '');
   const clientLogoUrl     = getAttachmentUrl(fields, 'client_logo');
   const hitchLogoUrl      = process.env.HITCH_LOGO_URL || null;
+  const mustHaveField     = getFieldValue(fields, 'Must Have', '') || '';
+  const niceToHaveField   = getFieldValue(fields, 'Nice to Have', '') || '';
+  const notImportantField = getFieldValue(fields, 'Not Important', '') || '';
 
   log('airtable_fetch_complete', { rubricId, clientName });
 
@@ -120,6 +123,9 @@ export default async function handler(req, res) {
       conflictNarrative,
       hitchLogoUrl,
       clientLogoUrl,
+      mustHaveField,
+      niceToHaveField,
+      notImportantField,
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
