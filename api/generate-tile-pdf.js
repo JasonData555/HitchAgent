@@ -100,6 +100,7 @@ export default async function handler(req, res) {
   const reasonsToConsider       = getFieldValue(fields, 'Reasons to Consider');
   const cultureAdd              = getFieldValue(fields, 'Culture Add');
   const anticipatedConcerns     = getFieldValue(fields, 'Anticipated Concerns');
+  const additionalInfo          = getFieldValue(fields, 'Additional Info');
 
   const photoUrl     = getAttachmentUrl(fields, 'Profile Pic');
   const hitchLogoUrl = process.env.HITCH_LOGO_URL || null;
@@ -123,6 +124,7 @@ export default async function handler(req, res) {
       reasonsToConsider,
       cultureAdd,
       anticipatedConcerns,
+      additionalInfo,
       photoUrl,
       hitchLogoUrl,
     });
