@@ -2,7 +2,7 @@
  * POST /api/generate-rubric-pdf
  *
  * Triggered by an Airtable automation or button webhook (after PM approves the draft).
- * Reads the Rubric Matrix JSON and Conflict Narrative from Airtable, generates a
+ * Reads the Rubric Matrix JSON from Airtable, generates a
  * branded Requirements Alignment PDF, uploads it to Vercel Blob, and saves the
  * attachment URL back to Airtable.
  *
@@ -101,12 +101,11 @@ export default async function handler(req, res) {
     return errorResponse(res, 500, 'Rubric Matrix JSON is missing or invalid — regenerate the draft first');
   }
 
-  const conflictNarrative = getFieldValue(fields, 'Conflict Narrative', '');
-  const clientLogoUrl     = getAttachmentUrl(fields, 'client_logo');
-  const hitchLogoUrl      = process.env.HITCH_LOGO_URL || null;
-  const mustHaveField     = getFieldValue(fields, 'Must Have', '') || '';
-  const niceToHaveField   = getFieldValue(fields, 'Nice to Have', '') || '';
-  const notImportantField = getFieldValue(fields, 'Not Important', '') || '';
+  const clientLogoUrl   = getAttachmentUrl(fields, 'client_logo');
+  const hitchLogoUrl    = process.env.HITCH_LOGO_URL || null;
+  const mustHaveField   = getFieldValue(fields, 'Must Have', '') || '';
+  const niceToHaveField = getFieldValue(fields, 'Nice to Have', '') || '';
+  const redFlagsField   = getFieldValue(fields, 'Red Flags', '') || '';
 
   log('airtable_fetch_complete', { rubricId, clientName });
 
@@ -120,12 +119,11 @@ export default async function handler(req, res) {
       panelMembers:      matrixJson.panelMembers || [],
       domains:           matrixJson.domains || [],
       conflicts:         matrixJson.conflicts || [],
-      conflictNarrative,
       hitchLogoUrl,
       clientLogoUrl,
       mustHaveField,
       niceToHaveField,
-      notImportantField,
+      redFlagsField,
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });

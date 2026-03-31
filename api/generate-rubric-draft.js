@@ -21,7 +21,7 @@ import {
   getFieldValue,
   getRecordsByFormula,
 } from '../lib/airtable.js';
-import { generateRubricNarrative } from '../lib/anthropic.js';
+import { generateRubricPriorityText } from '../lib/anthropic.js';
 import { log } from '../lib/logger.js';
 
 const RUBRIC_TABLE = process.env.RUBRIC_TABLE_ID || 'Rubric';
@@ -199,24 +199,6 @@ export default async function handler(req, res) {
     scores:    Object.fromEntries(activeDomains.map((d) => [d, pm.scores[d] || ''])),
   }));
 
-  // ── Claude: generate conflict narrative ───────────────────────────────────
-  log('claude_api_called', { model: 'claude-haiku-4-5-20251001', rubricId });
-  let narrative;
-  try {
-    narrative = await generateRubricNarrative(
-      clientName,
-      panelDataForClaude,
-      conflictDetails,
-      attributedNotes
-    );
-  } catch (err) {
-    log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    await updateRecord(RUBRIC_TABLE, rubricId, { 'Rubric Draft Status': 'Draft Error' }).catch(() => {});
-    return errorResponse(res, 500, 'Content synthesis failed');
-  }
-
-  log('claude_api_complete', { rubricId });
-
   // ── Build matrix JSON ─────────────────────────────────────────────────────
   const matrixJson = {
     clientName,
@@ -270,19 +252,36 @@ export default async function handler(req, res) {
     .filter(d => (domainAvgs[d] ?? -1) >= 3.0 && (domainAvgs[d] ?? -1) < 4.0)
     .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
 
-  const notImportantDomains = matrixJson.domains
+  const redFlagsDomains = matrixJson.domains
     .filter(d => domainAvgs[d] !== undefined && (domainAvgs[d] ?? -1) < 3.0)
     .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
+
+  // ── Claude: generate priority narrative text ──────────────────────────────
+  log('claude_api_called', { model: 'claude-haiku-4-5-20251001', rubricId });
+  let priorityText;
+  try {
+    priorityText = await generateRubricPriorityText(
+      clientName,
+      searchName,
+      attributedNotes,
+      { mustHave: mustHaveDomains, niceToHave: niceToHaveDomains, redFlags: redFlagsDomains }
+    );
+  } catch (err) {
+    log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    await updateRecord(RUBRIC_TABLE, rubricId, { 'Rubric Draft Status': 'Draft Error' }).catch(() => {});
+    return errorResponse(res, 500, 'Content synthesis failed');
+  }
+
+  log('claude_api_complete', { rubricId });
 
   // ── Write back to Airtable ────────────────────────────────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
       'Rubric Matrix JSON':  JSON.stringify(matrixJson, null, 2),
-      'Conflict Narrative':  narrative,
       'Rubric Draft Status': 'Draft Ready',
-      'Must Have':           mustHaveDomains.length     > 0 ? mustHaveDomains.join(', ')     : 'None',
-      'Nice to Have':        niceToHaveDomains.length   > 0 ? niceToHaveDomains.join(', ')   : 'None',
-      'Not Important':       notImportantDomains.length > 0 ? notImportantDomains.join(', ') : 'None',
+      'Must Have':           priorityText.mustHave,
+      'Nice to Have':        priorityText.niceToHave,
+      'Red Flags':           priorityText.redFlags,
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
