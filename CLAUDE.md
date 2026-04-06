@@ -108,7 +108,7 @@ Fields **written** by the app:
 
 **Tile Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → PPTX and/or PDF generated.
 
-**Rubric-aware tile drafts:** The draft endpoint optionally fetches the linked Rubric Matrix JSON for the associated Search. The join path is `Candidate Tile.Project` (linked record) → Search record ← `Rubric.Client` (linked record). If a Rubric with a populated `Rubric Matrix JSON` is found, it is passed to Claude as context to calibrate emphasis in Relevant Domain Expertise and Anticipated Concerns. If no linked Rubric exists or the JSON is empty, the draft is generated using candidate data alone (graceful degradation, no error).
+**Rubric-aware tile drafts:** The draft endpoint optionally fetches the linked Rubric Matrix JSON and priority fields (`Must Have`, `Nice to Have`, `Red Flags`) for the associated Search. The join path is `Candidate Tile.Project` (linked record) → Search record ← `Rubric.Client` (linked record). When priority fields are present, Claude performs a structured evaluation before generating output (see Claude Integration). If no linked Rubric exists or fields are empty, the draft is generated from candidate data alone (graceful degradation, no error).
 
 ---
 
@@ -237,7 +237,7 @@ The PPTX and PDF endpoints are independent — either or both can be triggered f
 ## Claude Integration
 
 **Model:** `claude-haiku-4-5-20251001`
-**Max tokens:** 2,000
+**Max tokens:** 4,000
 **Retry:** Once on timeout or HTTP 5xx.
 
 **Security in prompts:**
@@ -249,7 +249,28 @@ The PPTX and PDF endpoints are independent — either or both can be triggered f
 
 **Reasons to Consider format:** Exactly 4 bullets. Each bullet: bold 3–5-word differentiator label (e.g. `**Enterprise security leadership:**`) followed by 1–2 substantiating sentences. Max 200 words total. Bold `**markers**` are stripped by `stripMarkdown()` before HTML rendering — output is plain text in the PDF.
 
-**Rubric narrative generation:** Separate `generateRubricNarrative()` export in `lib/anthropic.js`. Uses `claude-sonnet-4-6`, max 800 tokens. Calls `callClaudeForText()` (plain-text, no JSON). Returns a 3–5 sentence paragraph. Prompt instructions:
+**Structured rubric evaluation (when `mustHave`/`niceToHave`/`redFlags` are present):**
+The prompt instructs Claude to complete a 3-step internal evaluation before writing any section output:
+1. **EVALUATE MUST HAVE ITEMS** — classify each item as `EVIDENCE FOUND` (named company, role context, concrete outcome) or `NO EVIDENCE FOUND` against resume + notes
+2. **EVALUATE NICE TO HAVE ITEMS** — same classification
+3. **EVALUATE RED FLAG ITEMS** — classify each flag as `EVIDENCE FOUND` (specific observation) or `NO EVIDENCE FOUND`
+
+Evidence quality standard (applied in steps 1–2):
+- **Strong** (EVIDENCE FOUND for Reasons to Consider): named company + specific role context, quantified outcome, or explicit reference/recruiter observation
+- **Weak** (not used for Reasons to Consider): generic mention, implied experience, single passing reference
+- **None** (use for Anticipated Concerns gaps): absent from resume and notes, or only tangentially related
+
+**Reasons to Consider calibration (rubric-aware):** Draws exclusively from Must Have / Nice to Have `EVIDENCE FOUND` items with strong evidence. Each bullet must name the company and include a concrete detail. Must Have items fill top bullets; Nice to Have fills remaining slots. Items with no/weak evidence are excluded.
+
+**Anticipated Concerns calibration (rubric-aware):**
+- *Input A — gaps:* Must Have `NO EVIDENCE FOUND` → `"No evidence of [item] in the candidate's background."` Nice to Have gaps (secondary) → `"Limited evidence of [item] — worth exploring in interview."`
+- *Input B — red flags:* Red Flag `EVIDENCE FOUND` → `"Evidence of [specific observation] noted — aligns with [red flag category]."`
+- Ordering: Must Have gaps → Nice to Have gaps → Red Flag evidence
+- If no Must Have gaps and no Red Flag evidence, note minor interview probes rather than manufacturing concerns
+
+All three calibration blocks gate on `hasPriorities`/`mustHave`/`redFlags` being truthy — graceful degradation to generic instructions when Rubric data is absent.
+
+**Rubric narrative generation:** Separate `generateRubricPriorityText()` export in `lib/anthropic.js`. Uses `claude-haiku-4-5-20251001`, max 800 tokens. Returns `{ mustHave, niceToHave, redFlags }` as semicolon-delimited narrative strings. Separate `generateRubricNarrative()` export uses `claude-sonnet-4-6`, max 800 tokens, plain-text output. Returns a 3–5 sentence paragraph. Prompt instructions:
 - Write for a **senior recruiter** audience preparing for a client debrief
 - Describe where interviewers were in strong alignment (scores + note themes)
 - Name interviewers when describing meaningful disagreement or specific perspectives
