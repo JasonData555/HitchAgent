@@ -1,3 +1,7 @@
+// DEPRECATED: This endpoint generated a PDF rubric from the matrix scoring model.
+// The rubric format has changed to a hosted HTML document. Use /api/generate-rubric-html instead.
+// This file is retained for reference and must not be called from any active automation.
+
 /**
  * POST /api/generate-rubric-pdf
  *

@@ -2,9 +2,9 @@
  * POST /api/generate-rubric-draft
  *
  * Triggered by an Airtable automation or button webhook.
- * Fetches a Rubric record and its linked ITI Input records, computes panel
- * alignment and conflicts, calls Claude for a narrative summary, and writes
- * the matrix JSON + narrative back to Airtable.
+ * Fetches a Rubric record and its linked ITI Input records, collects
+ * free-text Notes per interviewer, calls Claude to synthesize five
+ * structured fields, and writes them back to the Rubric record.
  *
  * Required header: x-api-key
  * Body: { "rubricId": "recXXXXXXXX" }
@@ -21,28 +21,12 @@ import {
   getFieldValue,
   getRecordsByFormula,
 } from '../lib/airtable.js';
-import { generateRubricPriorityText } from '../lib/anthropic.js';
+import { synthesizeRubricFields } from '../lib/anthropic.js';
 import { log } from '../lib/logger.js';
 
 const RUBRIC_TABLE = process.env.RUBRIC_TABLE_ID || 'Rubric';
 const ITI_TABLE    = process.env.ITI_TABLE_ID    || 'ITI Input';
 const RUBRIC_ID_RE = /^rec[A-Za-z0-9]{14}$/;
-
-// All 12 security leadership domain field names (exact Airtable field names)
-const DOMAIN_FIELDS = [
-  'Manage IT',
-  'ProdSec_AppSec',
-  'AI Security',
-  'GRC',
-  'Security Architecture',
-  'Network and Infrastructure Security',
-  'TPRM',
-  'Data Protection and Privacy',
-  'IAM',
-  'Cloud Security',
-  'Security Operations',
-  'External Communication',
-];
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -62,17 +46,6 @@ function isValidApiKey(provided, expected) {
     if (a.length !== b.length) return false;
     return timingSafeEqual(a, b);
   } catch { return false; }
-}
-
-/**
- * Parse numeric score from an Airtable domain field value.
- * Returns null for N/A, empty, or unrecognised values.
- * e.g. "5 - Must have" → 5, "N/A" → null
- */
-function parseScore(value) {
-  if (!value || value === 'N/A') return null;
-  const n = parseInt(String(value), 10);
-  return isNaN(n) ? null : n;
 }
 
 /**
@@ -121,7 +94,7 @@ export default async function handler(req, res) {
     return errorResponse(
       res,
       400,
-      "Cannot overwrite approved content. Reset status to regenerate."
+      'Cannot overwrite approved content. Reset status to regenerate.'
     );
   }
 
@@ -135,153 +108,40 @@ export default async function handler(req, res) {
     return errorResponse(res, 500, 'Failed to fetch panel member inputs');
   }
 
-  if (itiRecords.length < 2) {
-    return errorResponse(res, 400, 'Rubric must have at least 2 panel member inputs');
+  if (itiRecords.length < 1) {
+    return errorResponse(res, 400, 'Rubric must have at least 1 panel member input');
   }
 
-  log('airtable_fetch_complete', { rubricId, panelMemberCount: itiRecords.length });
+  log('iti_records_fetched', { rubricId, panelMemberCount: itiRecords.length });
 
-  // ── Extract panel member data ─────────────────────────────────────────────
-  const panelMembers = itiRecords.map((r) => {
-    const f = r.fields;
-    const scores = {};
-    for (const domain of DOMAIN_FIELDS) {
-      scores[domain] = getFieldValue(f, domain, '');
-    }
-    return {
-      name:             getFieldValue(f, 'panel_member', ''),
-      title:            getFieldValue(f, 'panel_member_title', ''),
-      reportsTo:        getFieldValue(f, 'Reports To', ''),
-      teamSizeToday:    getFieldValue(f, 'team_size_today', ''),
-      teamSize18Months: getFieldValue(f, 'team_size_18months', ''),
-      location:         getFieldValue(f, 'Location Requirement', ''),
-      notes:            getFieldValue(f, 'Notes', ''),
-      scores,
-    };
-  });
-
-  // ── Determine active domains (≥1 non-null score across all panel members) ─
-  const activeDomains = DOMAIN_FIELDS.filter((domain) =>
-    panelMembers.some((pm) => parseScore(pm.scores[domain]) !== null)
-  );
-
-  // ── Identify conflicts: max spread ≥ 2 among non-null scores ─────────────
-  const conflictDomains = [];
-  for (const domain of activeDomains) {
-    const scores = panelMembers
-      .map((pm) => parseScore(pm.scores[domain]))
-      .filter((s) => s !== null);
-    if (scores.length >= 2) {
-      const spread = Math.max(...scores) - Math.min(...scores);
-      if (spread >= 2) conflictDomains.push(domain);
-    }
-  }
-
-  // Build conflict detail objects for Claude
-  const conflictDetails = conflictDomains.map((domain) => ({
-    domain,
-    panelScores: panelMembers
-      .filter((pm) => parseScore(pm.scores[domain]) !== null)
-      .map((pm) => ({ name: pm.name, title: pm.title, score: pm.scores[domain] })),
+  // ── Extract interviewer name + notes only ─────────────────────────────────
+  const interviewerNotes = itiRecords.map((r) => ({
+    name:  getFieldValue(r.fields, 'panel_member', ''),
+    notes: getFieldValue(r.fields, 'Notes', ''),
   }));
 
-  // Notes attributed per panel member (for Claude context)
-  const attributedNotes = panelMembers
-    .filter((pm) => pm.notes)
-    .map((pm) => `${pm.name}:\n${pm.notes}`)
-    .join('\n\n');
-
-  // Panel data for Claude (active domains only, no internal notes field)
-  const panelDataForClaude = panelMembers.map((pm) => ({
-    name:      pm.name,
-    title:     pm.title,
-    reportsTo: pm.reportsTo,
-    scores:    Object.fromEntries(activeDomains.map((d) => [d, pm.scores[d] || ''])),
-  }));
-
-  // ── Build matrix JSON ─────────────────────────────────────────────────────
-  const matrixJson = {
-    clientName,
-    searchName,
-    contextRows: [
-      { label: 'Position reports to',         field: 'reportsTo'        },
-      { label: 'Current team size',           field: 'teamSizeToday'    },
-      { label: 'Est. team size in 18 months', field: 'teamSize18Months' },
-      { label: 'Location',                    field: 'location'         },
-    ],
-    panelMembers: panelMembers.map((pm) => ({
-      name:             pm.name,
-      title:            pm.title,
-      reportsTo:        pm.reportsTo,
-      teamSizeToday:    pm.teamSizeToday,
-      teamSize18Months: pm.teamSize18Months,
-      location:         pm.location,
-      scores:           Object.fromEntries(activeDomains.map((d) => [d, pm.scores[d] || ''])),
-    })),
-    domains:   activeDomains,
-    conflicts: conflictDomains,
-  };
-
-  // ── Compute priority tiers for new Airtable fields ───────────────────────
-  const _TEXT_SCORE_MAP = {
-    'must have': 5, 'important to have': 4, 'nice to have': 3,
-    'low priority': 2, 'not important to have': 1,
-  };
-  function _parseScoreNum(raw) {
-    if (!raw || raw === 'N/A') return null;
-    const n = parseInt(String(raw), 10);
-    if (!isNaN(n)) return n;
-    return _TEXT_SCORE_MAP[String(raw).toLowerCase().trim()] ?? null;
-  }
-
-  const domainAvgs = {};
-  for (const domain of matrixJson.domains) {
-    const scores = matrixJson.panelMembers
-      .map(pm => _parseScoreNum(pm.scores[domain]))
-      .filter(s => s !== null);
-    if (scores.length > 0) {
-      domainAvgs[domain] = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
-    }
-  }
-
-  const mustHaveDomains = matrixJson.domains
-    .filter(d => (domainAvgs[d] ?? -1) >= 4.0)
-    .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
-
-  const niceToHaveDomains = matrixJson.domains
-    .filter(d => (domainAvgs[d] ?? -1) >= 3.0 && (domainAvgs[d] ?? -1) < 4.0)
-    .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
-
-  const redFlagsDomains = matrixJson.domains
-    .filter(d => domainAvgs[d] !== undefined && (domainAvgs[d] ?? -1) < 3.0)
-    .sort((a, b) => (domainAvgs[b] ?? 0) - (domainAvgs[a] ?? 0));
-
-  // ── Claude: generate priority narrative text ──────────────────────────────
+  // ── Claude: synthesize five structured fields from interviewer notes ───────
   log('claude_api_called', { model: 'claude-haiku-4-5-20251001', rubricId });
-  let priorityText;
+  let synthesized;
   try {
-    priorityText = await generateRubricPriorityText(
-      clientName,
-      searchName,
-      attributedNotes,
-      { mustHave: mustHaveDomains, niceToHave: niceToHaveDomains, redFlags: redFlagsDomains }
-    );
+    synthesized = await synthesizeRubricFields(clientName, searchName, interviewerNotes);
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     await updateRecord(RUBRIC_TABLE, rubricId, { 'Rubric Draft Status': 'Draft Error' }).catch(() => {});
     return errorResponse(res, 500, 'Content synthesis failed');
   }
 
-  log('claude_api_complete', { rubricId });
+  log('rubric_narrative_complete', { rubricId });
 
   // ── Write back to Airtable ────────────────────────────────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
-      'Rubric Matrix JSON':  JSON.stringify(matrixJson, null, 2),
-      'Rubric Draft Status': 'Draft Ready',
-      'Must Have':           priorityText.mustHave,
-      'Nice to Have':        priorityText.niceToHave,
-      'Red Flags':           priorityText.redFlags,
+      'Must Have':                synthesized.mustHave,
+      'Nice to Have':             synthesized.niceToHave,
+      'Red Flags':                synthesized.redFlags,
+      'Success in Role':          synthesized.successInRole,
+      'Functional Responsibility': synthesized.functionalResponsibility,
+      'Rubric Draft Status':      'Draft Ready',
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
@@ -296,9 +156,8 @@ export default async function handler(req, res) {
     data: {
       rubricId,
       clientName,
-      panelMemberCount: panelMembers.length,
-      domainsIncluded:  activeDomains.length,
-      conflictsFound:   conflictDomains.length,
+      panelMemberCount: itiRecords.length,
+      fieldsWritten: ['Must Have', 'Nice to Have', 'Red Flags', 'Success in Role', 'Functional Responsibility'],
     },
     warnings: [],
   });

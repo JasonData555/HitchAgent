@@ -19,14 +19,15 @@ const { default: pptxHandler }         = await import('./api/generate-tile-pptx.
 const { default: draftHandler }        = await import('./api/generate-tile-draft.js');
 const { default: pdfHandler }          = await import('./api/generate-tile-pdf.js');
 const { default: rubricDraftHandler }  = await import('./api/generate-rubric-draft.js');
-const { default: rubricPdfHandler }    = await import('./api/generate-rubric-pdf.js');
+const { default: rubricHtmlHandler }   = await import('./api/generate-rubric-html.js');
+// rubricPdfHandler retained for reference but not registered as an active route (deprecated)
 
 const ROUTES = {
-  '/api/generate-tile-pptx':   pptxHandler,
-  '/api/generate-tile-draft':  draftHandler,
-  '/api/generate-tile-pdf':    pdfHandler,
+  '/api/generate-tile-pptx':    pptxHandler,
+  '/api/generate-tile-draft':   draftHandler,
+  '/api/generate-tile-pdf':     pdfHandler,
   '/api/generate-rubric-draft': rubricDraftHandler,
-  '/api/generate-rubric-pdf':   rubricPdfHandler,
+  '/api/generate-rubric-html':  rubricHtmlHandler,
 };
 
 // ── HTTP server ────────────────────────────────────────────────────────────
