@@ -136,12 +136,12 @@ export default async function handler(req, res) {
   // ── Write back to Airtable ────────────────────────────────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
-      'Must Have':                synthesized.mustHave,
-      'Nice to Have':             synthesized.niceToHave,
-      'Red Flags':                synthesized.redFlags,
-      'Success in Role':          synthesized.successInRole,
-      'Functional Responsibility': synthesized.functionalResponsibility,
-      'Rubric Draft Status':      'Draft Ready',
+      'Must Have':                    synthesized.mustHave,
+      'Nice to Have':                 synthesized.niceToHave,
+      'Red Flags':                    synthesized.redFlags,
+      'Success in the Role':          synthesized.successInRole,
+      'Functional Responsibilities':  synthesized.functionalResponsibility,
+      'Rubric Draft Status':          'Draft Ready',
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });

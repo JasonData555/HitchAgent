@@ -91,8 +91,8 @@ export default async function handler(req, res) {
   const mustHave               = getFieldValue(fields, 'Must Have', '');
   const niceToHave             = getFieldValue(fields, 'Nice to Have', '');
   const redFlags               = getFieldValue(fields, 'Red Flags', '');
-  const successInRole          = getFieldValue(fields, 'Success in Role', '');
-  const functionalResp         = getFieldValue(fields, 'Functional Responsibility', '');
+  const successInRole          = getFieldValue(fields, 'Success in the Role', '');
+  const functionalResp         = getFieldValue(fields, 'Functional Responsibilities', '');
   const location               = getFieldValue(fields, 'Location', '');
   const currentTeamSize        = getFieldValue(fields, 'Current Team Size', '');
   const teamSize18Months       = getFieldValue(fields, 'Est. Team Size in 18-24 Months', '');
