@@ -16,7 +16,7 @@
 
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
-import { getRecord, updateRecord, getFieldValue } from '../lib/airtable.js';
+import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { createRubricHtml } from '../lib/html-rubric.js';
 import { imageToBase64 } from '../lib/fetch-image.js';
 import { log } from '../lib/logger.js';
@@ -100,18 +100,18 @@ export default async function handler(req, res) {
 
   log('airtable_fetch_complete', { rubricId, clientName });
 
-  // ── Download Hitch logo (non-fatal if unavailable) ────────────────────────
+  // ── Download logos in parallel (non-fatal if unavailable) ───────────────────
   const warnings = [];
-  let hitchLogoDataUri = '';
-  const hitchLogoUrl = process.env.HITCH_LOGO_URL;
-  if (hitchLogoUrl) {
-    hitchLogoDataUri = await imageToBase64(hitchLogoUrl, 'image/png');
-    if (!hitchLogoDataUri) {
-      warnings.push('Hitch logo could not be loaded; using text fallback');
-    }
-  } else {
-    warnings.push('HITCH_LOGO_URL not set; using text fallback');
-  }
+  const hitchLogoUrl  = process.env.HITCH_LOGO_URL;
+  const clientLogoUrl = getAttachmentUrl(fields, 'client_logo');
+
+  const [hitchLogoDataUri, clientLogoDataUri] = await Promise.all([
+    hitchLogoUrl  ? imageToBase64(hitchLogoUrl,  'image/png') : Promise.resolve(''),
+    clientLogoUrl ? imageToBase64(clientLogoUrl, 'image/png') : Promise.resolve(''),
+  ]);
+
+  if (!hitchLogoDataUri)  warnings.push('Hitch logo could not be loaded; using text fallback');
+  if (!clientLogoDataUri) warnings.push('Client logo could not be loaded; using text fallback');
 
   // ── Generate HTML ─────────────────────────────────────────────────────────
   let htmlString;
@@ -129,6 +129,7 @@ export default async function handler(req, res) {
       successInRole,
       functionalResponsibility: functionalResp,
       hitchLogoDataUri,
+      clientLogoDataUri,
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
