@@ -19,7 +19,8 @@ const { default: pptxHandler }         = await import('./api/generate-tile-pptx.
 const { default: draftHandler }        = await import('./api/generate-tile-draft.js');
 const { default: pdfHandler }          = await import('./api/generate-tile-pdf.js');
 const { default: rubricDraftHandler }  = await import('./api/generate-rubric-draft.js');
-const { default: rubricHtmlHandler }   = await import('./api/generate-rubric-html.js');
+const { default: rubricHtmlHandler }     = await import('./api/generate-rubric-html.js');
+const { default: deactivateRubricHandler } = await import('./api/deactivate-rubric.js');
 // rubricPdfHandler retained for reference but not registered as an active route (deprecated)
 
 const ROUTES = {
@@ -28,6 +29,7 @@ const ROUTES = {
   '/api/generate-tile-pdf':     pdfHandler,
   '/api/generate-rubric-draft': rubricDraftHandler,
   '/api/generate-rubric-html':  rubricHtmlHandler,
+  '/api/deactivate-rubric':     deactivateRubricHandler,
 };
 
 // ── HTTP server ────────────────────────────────────────────────────────────
