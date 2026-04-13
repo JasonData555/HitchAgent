@@ -154,7 +154,8 @@ export default async function handler(req, res) {
   // ── Write URL back to Airtable ────────────────────────────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
-      rubric_url: rubricUrl,
+      rubric_url:          rubricUrl,
+      'Rubric URL Status': 'Active',
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
