@@ -1,0 +1,232 @@
+/**
+ * POST /api/generate-tile-html
+ *
+ * Triggered by an Airtable automation or button webhook (after PM approves the
+ * tile draft). Generates a self-contained HTML candidate profile page, uploads
+ * it to Vercel Blob as a public HTML file, and saves the URL back to Airtable.
+ *
+ * Required header: x-api-key
+ * Body: { "tileId": "recXXXXXXXX" }
+ * Requires: Tile Draft Status = "Approved"
+ *
+ * Writes to Airtable:
+ *   tile_url    — public HTML blob URL
+ *   Tile Status — "Active"
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * AIRTABLE AUTOMATION CONFIGURATION
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Table:   Candidate Tile
+ * Trigger: "Tile Draft Status" changes to "Approved"
+ *   (or a button field — same trigger pattern as the PDF automation)
+ *
+ * Step 1 — Find record
+ *   Find the Candidate Tile record that triggered the automation.
+ *
+ * Step 2 — Guard: stop if not Approved
+ *   If "Tile Draft Status" is not "Approved", stop the automation.
+ *
+ * Step 3 — Call generate-tile-html endpoint
+ *   Send an HTTP POST request to:
+ *     https://<your-vercel-domain>/api/generate-tile-html
+ *   Headers:
+ *     Content-Type: application/json
+ *     x-api-key: <INTERNAL_API_KEY>
+ *   Body:
+ *     { "tileId": "<record ID>" }
+ *
+ * Step 4 — On success (response.status === "success")
+ *   No additional writes needed — endpoint sets tile_url and Tile Status.
+ *   Optionally: show response.data.htmlUrl to the PM via a notification.
+ *
+ * Step 5 — On failure (response.status === "error")
+ *   Write response.message to a "Tile Generation Log" field (Long text) for
+ *   PM visibility.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * DEACTIVATION
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The existing "Deactivate Tile" automation and api/deactivate-tile.js endpoint
+ * work unchanged — they read tile_url and delete the blob, which is format-
+ * agnostic (.html blobs deactivate identically to .pdf blobs).
+ */
+
+import { timingSafeEqual } from 'crypto';
+import { put } from '@vercel/blob';
+import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
+import { createCandidateTileWebHtml } from '../lib/html-tile-web.js';
+import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
+import { log } from '../lib/logger.js';
+
+const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
+const TILE_ID_RE = /^rec[A-Za-z0-9]{14}$/;
+const HTML_CONTENT_TYPE = 'text/html';
+
+function errorResponse(res, status, message) {
+  return res.status(status).json({
+    status: 'error',
+    message,
+    data: null,
+    warnings: [],
+  });
+}
+
+function isValidApiKey(provided, expected) {
+  if (!provided || !expected) return false;
+  try {
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch { return false; }
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return errorResponse(res, 405, 'Method not allowed');
+  }
+
+  if (!isValidApiKey(req.headers['x-api-key'], process.env.INTERNAL_API_KEY)) {
+    return errorResponse(res, 401, 'Unauthorized');
+  }
+
+  const { tileId } = req.body || {};
+  if (!tileId) {
+    return errorResponse(res, 400, 'Missing required field: tileId');
+  }
+  if (!TILE_ID_RE.test(tileId)) {
+    return errorResponse(res, 400, 'Invalid tileId format');
+  }
+
+  log('request_received', { endpoint: 'generate-tile-html', tileId });
+
+  // ── Fetch Candidate Tile record ───────────────────────────────────────────
+  let record;
+  try {
+    record = await getRecord(TABLE, tileId);
+  } catch (err) {
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 404, 'Candidate Tile not found');
+  }
+
+  const { fields } = record;
+
+  // ── Validate: must be Approved ────────────────────────────────────────────
+  const status = getFieldValue(fields, 'Tile Draft Status', 'Not Started');
+  if (status !== 'Approved') {
+    return errorResponse(
+      res,
+      400,
+      `Cannot generate HTML: draft status is '${status}', must be 'Approved'`
+    );
+  }
+
+  // ── Extract all fields ────────────────────────────────────────────────────
+  const candidateName           = getFieldValue(fields, 'Candidate Name');
+  const currentTitle            = getFieldValue(fields, 'Current Title');
+  const currentCompany          = getFieldValue(fields, 'Current Company');
+  const location                = getFieldValue(fields, 'Location');
+  const education               = getFieldValue(fields, 'Education');
+  const institution             = getFieldValue(fields, 'Institution');
+  const email                   = getFieldValue(fields, 'Email');
+  const linkedinUrl             = getFieldValue(fields, 'LinkedIn');
+  const situation               = getFieldValue(fields, 'Situation');
+  const relevantDomainExpertise = getFieldValue(fields, 'Relevant Domain Expertise');
+  const reasonsToConsider       = getFieldValue(fields, 'Reasons to Consider');
+  const cultureAdd              = getFieldValue(fields, 'Culture Add');
+  const anticipatedConcerns     = getFieldValue(fields, 'Anticipated Concerns');
+  const additionalInfo          = getFieldValue(fields, 'Additional Info');
+
+  const photoUrl     = getAttachmentUrl(fields, 'Profile Pic');
+  const hitchLogoUrl = process.env.HITCH_LOGO_URL || null;
+
+  log('airtable_fetch_complete', { candidateName, tileId });
+
+  // ── Pre-fetch images as base64 data URIs (non-fatal if unavailable) ───────
+  const warnings = [];
+  const [photoDataUri, hitchLogoDataUri] = await Promise.all([
+    photoUrl
+      ? imageToBase64(photoUrl, guessMimeType(photoUrl)).catch(() => {
+          warnings.push('Profile photo could not be loaded; using placeholder');
+          return null;
+        })
+      : Promise.resolve(null),
+    hitchLogoUrl
+      ? imageToBase64(hitchLogoUrl, 'image/png').catch(() => {
+          warnings.push('Hitch logo could not be loaded; using text fallback');
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
+
+  if (!photoUrl) warnings.push('No profile photo URL found');
+  if (!hitchLogoUrl) warnings.push('HITCH_LOGO_URL not set; using text fallback');
+
+  // ── Generate HTML ─────────────────────────────────────────────────────────
+  let htmlString;
+  try {
+    htmlString = createCandidateTileWebHtml({
+      candidateName,
+      currentTitle,
+      currentCompany,
+      location,
+      education,
+      institution,
+      email,
+      linkedinUrl,
+      situation,
+      relevantDomainExpertise,
+      reasonsToConsider,
+      cultureAdd,
+      anticipatedConcerns,
+      additionalInfo,
+      photoDataUri,
+      hitchLogoDataUri,
+    });
+  } catch (err) {
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, 'HTML generation failed');
+  }
+
+  log('tile_html_generated', { fileSize: htmlString.length, tileId });
+
+  // ── Upload to Vercel Blob ──────────────────────────────────────────────────
+  let htmlUrl;
+  try {
+    const filename = `tiles/${tileId}-${Date.now()}.html`;
+    const blob = await put(filename, htmlString, {
+      access: 'public',
+      contentType: HTML_CONTENT_TYPE,
+    });
+    htmlUrl = blob.url;
+  } catch (err) {
+    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, 'Failed to upload HTML to storage');
+  }
+
+  log('blob_uploaded', { url: htmlUrl, tileId });
+
+  // ── Write URL back to Airtable ────────────────────────────────────────────
+  try {
+    await updateRecord(TABLE, tileId, {
+      tile_url:      htmlUrl,
+      'Tile Status': 'Active',
+    });
+  } catch (err) {
+    log('error', { error: err.message, htmlUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, `HTML generated but failed to save to Airtable: ${htmlUrl}`);
+  }
+
+  log('airtable_updated', { field: 'tile_url', tileId });
+
+  return res.status(200).json({
+    status: 'success',
+    message: 'Candidate tile HTML generated',
+    data: {
+      tileId,
+      candidateName,
+      htmlUrl,
+    },
+    warnings,
+  });
+}

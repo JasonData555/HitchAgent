@@ -18,6 +18,7 @@ for (const line of env.split('\n')) {
 const { default: pptxHandler }         = await import('./api/generate-tile-pptx.js');
 const { default: draftHandler }        = await import('./api/generate-tile-draft.js');
 const { default: pdfHandler }          = await import('./api/generate-tile-pdf.js');
+const { default: tileHtmlHandler }     = await import('./api/generate-tile-html.js');
 const { default: rubricDraftHandler }  = await import('./api/generate-rubric-draft.js');
 const { default: rubricHtmlHandler }     = await import('./api/generate-rubric-html.js');
 const { default: deactivateRubricHandler } = await import('./api/deactivate-rubric.js');
@@ -27,6 +28,7 @@ const ROUTES = {
   '/api/generate-tile-pptx':    pptxHandler,
   '/api/generate-tile-draft':   draftHandler,
   '/api/generate-tile-pdf':     pdfHandler,
+  '/api/generate-tile-html':    tileHtmlHandler,
   '/api/generate-rubric-draft': rubricDraftHandler,
   '/api/generate-rubric-html':  rubricHtmlHandler,
   '/api/deactivate-rubric':     deactivateRubricHandler,
