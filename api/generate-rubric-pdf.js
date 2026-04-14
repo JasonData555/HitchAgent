@@ -1,37 +1,31 @@
-// DEPRECATED: This endpoint generated a PDF rubric from the matrix scoring model.
-// The rubric format has changed to a hosted HTML document. Use /api/generate-rubric-html instead.
-// This file is retained for reference and must not be called from any active automation.
-
 /**
  * POST /api/generate-rubric-pdf
  *
- * Triggered by an Airtable automation or button webhook (after PM approves the draft).
- * Reads the Rubric Matrix JSON from Airtable, generates a
- * branded Requirements Alignment PDF, uploads it to Vercel Blob, and saves the
- * attachment URL back to Airtable.
+ * Triggered by an Airtable automation or button webhook (after PM approves the rubric draft).
+ * Generates a Role Requirements Brief PDF, uploads it to Vercel Blob,
+ * and saves the URL back to the "Rubric PDF URL" field on the Rubric record.
  *
  * Required header: x-api-key
  * Body: { "rubricId": "recXXXXXXXX" }
- * Requires: Rubric Status = "Approved"
+ * Requires: Rubric Draft Status = "Approved"
+ *
+ * Airtable prerequisite: add a field named "Rubric PDF URL" (URL or Text type)
+ * to the Rubric table before using this endpoint.
  *
  * Environment variables (in addition to shared ones in CLAUDE.md):
  *   RUBRIC_TABLE_ID  — Airtable table name/ID for the Rubric table
+ *   HITCH_LOGO_URL   — Public HTTPS URL for the Hitch Partners logo PNG
  */
 
-import { randomUUID, timingSafeEqual } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
-import {
-  getRecord,
-  updateRecord,
-  getFieldValue,
-  getAttachmentUrl,
-} from '../lib/airtable.js';
+import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { createRubricPdf } from '../lib/pdf-rubric.js';
 import { log } from '../lib/logger.js';
 
-const RUBRIC_TABLE    = process.env.RUBRIC_TABLE_ID || 'Rubric';
+const RUBRIC_TABLE     = process.env.RUBRIC_TABLE_ID || 'Rubric';
 const PDF_CONTENT_TYPE = 'application/pdf';
-const RUBRIC_ID_RE    = /^rec[A-Za-z0-9]{14}$/;
+const RUBRIC_ID_RE     = /^rec[A-Za-z0-9]{14}$/;
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -82,34 +76,32 @@ export default async function handler(req, res) {
   }
 
   const { fields } = record;
+  const clientName = getFieldValue(fields, 'client_name', '');
+  const searchName = getFieldValue(fields, 'Search', '');
 
-  // ── Validate: must be Approved ────────────────────────────────────────────
-  const status = getFieldValue(fields, 'Rubric Draft Status', 'Not Started');
-  if (status !== 'Approved') {
+  // ── Validate status is Approved ───────────────────────────────────────────
+  const currentStatus = getFieldValue(fields, 'Rubric Draft Status', '');
+  if (currentStatus !== 'Approved') {
     return errorResponse(
       res,
       400,
-      `Cannot generate PDF: status is '${status}', must be 'Approved'`
+      `Cannot generate PDF: rubric status is '${currentStatus}'. Approve the draft first.`
     );
   }
 
-  // ── Extract fields ────────────────────────────────────────────────────────
-  const rawMatrixJson = getFieldValue(fields, 'Rubric Matrix JSON', '');
-  const clientName    = getFieldValue(fields, 'client_name', '');
+  // ── Extract content fields ────────────────────────────────────────────────
+  const mustHave          = getFieldValue(fields, 'Must Have', '');
+  const niceToHave        = getFieldValue(fields, 'Nice to Have', '');
+  const redFlags          = getFieldValue(fields, 'Red Flags', '');
+  const successInRole     = getFieldValue(fields, 'Success in the Role', '');
+  const functionalResp    = getFieldValue(fields, 'Functional Responsibilities', '');
+  const location          = getFieldValue(fields, 'Location', '');
+  const currentTeamSize   = getFieldValue(fields, 'Current Team Size', '');
+  const teamSize18Months  = getFieldValue(fields, 'Est. Team Size in 18-24 Months', '');
+  const positionReportsTo = getFieldValue(fields, 'Position Reports To', '');
 
-  let matrixJson;
-  try {
-    matrixJson = JSON.parse(rawMatrixJson);
-  } catch (err) {
-    log('error', { error: 'Invalid Rubric Matrix JSON', rubricId });
-    return errorResponse(res, 500, 'Rubric Matrix JSON is missing or invalid — regenerate the draft first');
-  }
-
-  const clientLogoUrl   = getAttachmentUrl(fields, 'client_logo');
-  const hitchLogoUrl    = process.env.HITCH_LOGO_URL || null;
-  const mustHaveField   = getFieldValue(fields, 'Must Have', '') || '';
-  const niceToHaveField = getFieldValue(fields, 'Nice to Have', '') || '';
-  const redFlagsField   = getFieldValue(fields, 'Red Flags', '') || '';
+  const hitchLogoUrl  = process.env.HITCH_LOGO_URL || null;
+  const clientLogoUrl = getAttachmentUrl(fields, 'client_logo') || null;
 
   log('airtable_fetch_complete', { rubricId, clientName });
 
@@ -117,24 +109,26 @@ export default async function handler(req, res) {
   let pdfBuffer;
   try {
     pdfBuffer = await createRubricPdf({
-      clientName:        matrixJson.clientName || clientName,
-      searchName:        matrixJson.searchName || '',
-      contextRows:       matrixJson.contextRows || [],
-      panelMembers:      matrixJson.panelMembers || [],
-      domains:           matrixJson.domains || [],
-      conflicts:         matrixJson.conflicts || [],
+      clientName,
+      searchName,
+      location,
+      currentTeamSize,
+      teamSize18Months,
+      positionReportsTo,
+      mustHave,
+      niceToHave,
+      redFlags,
+      successInRole,
+      functionalResponsibility: functionalResp,
       hitchLogoUrl,
       clientLogoUrl,
-      mustHaveField,
-      niceToHaveField,
-      redFlagsField,
     });
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(res, 500, 'PDF generation failed');
+    return errorResponse(res, 500, 'Rubric PDF generation failed');
   }
 
-  log('pdf_generated', { fileSize: pdfBuffer.length, rubricId });
+  log('rubric_pdf_generated', { fileSize: pdfBuffer.length, rubricId });
 
   // ── Upload to Vercel Blob ─────────────────────────────────────────────────
   let blobUrl;
@@ -143,41 +137,36 @@ export default async function handler(req, res) {
       `rubrics/${rubricId}-${Date.now()}.pdf`,
       pdfBuffer,
       {
-        access:      'public',
+        access: 'public',
         contentType: PDF_CONTENT_TYPE,
       }
     );
     blobUrl = url;
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(res, 500, 'Failed to upload PDF to storage');
+    return errorResponse(res, 500, 'Failed to upload rubric PDF to storage');
   }
 
   log('blob_uploaded', { url: blobUrl, rubricId });
 
-  // ── Update Airtable attachment field + plain-text URL ────────────────────
+  // ── Write URL back to Airtable ────────────────────────────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
-      'Rubric PDF': [{ url: blobUrl }],
-      'rubric_url': blobUrl,
+      'Rubric PDF URL': blobUrl,
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(
-      res,
-      500,
-      'PDF generated but failed to save to Airtable'
-    );
+    return errorResponse(res, 500, `PDF generated but failed to save to Airtable: ${blobUrl}`);
   }
 
-  log('airtable_updated', { fields: ['Rubric PDF', 'rubric_url'], rubricId });
+  log('airtable_updated', { field: 'Rubric PDF URL', rubricId });
 
   return res.status(200).json({
-    status:  'success',
+    status: 'success',
     message: 'Rubric PDF generated',
     data: {
       rubricId,
-      clientName: matrixJson.clientName || clientName,
+      clientName,
       pdfUrl: blobUrl,
     },
     warnings: [],

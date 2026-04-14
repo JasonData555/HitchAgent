@@ -117,12 +117,12 @@ export default async function handler(req, res) {
       location,
       education,
       institution,
-      email,
+      email:      null,        // excluded from PDF output
       linkedinUrl,
       situation,
       relevantDomainExpertise,
       reasonsToConsider,
-      cultureAdd,
+      cultureAdd: null,        // excluded from PDF output
       anticipatedConcerns,
       additionalInfo,
       photoUrl,
@@ -167,8 +167,8 @@ export default async function handler(req, res) {
   try {
     await updateRecord(TABLE, tileId, {
       'Candidate Tile PDF': [{ url: blobUrl }],
-      'tile_url': blobUrl,
-      'Tile Status': 'Active',
+      'Tile PDF URL':       blobUrl,
+      'Tile Status':        'Active',
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
