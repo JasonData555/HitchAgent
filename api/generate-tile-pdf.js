@@ -167,7 +167,6 @@ export default async function handler(req, res) {
   try {
     await updateRecord(TABLE, tileId, {
       'Candidate Tile PDF': [{ url: blobUrl }],
-      'Tile Status':        'Active',
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
