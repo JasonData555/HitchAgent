@@ -12,7 +12,7 @@
  */
 
 // Security: restrict proxying to Vercel Blob storage hosts only
-const BLOB_HOST_RE = /^https:\/\/[a-z0-9]+\.blob\.vercel-storage\.com\//;
+const BLOB_HOST_RE = /^https:\/\/[a-z0-9.-]+\.blob\.vercel-storage\.com\//;
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
