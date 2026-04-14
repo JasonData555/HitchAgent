@@ -144,7 +144,10 @@ export default async function handler(req, res) {
       access: 'public',
       contentType: HTML_CONTENT_TYPE,
     });
-    rubricUrl = blob.url;
+    // Serve via proxy so browser renders HTML inline (Vercel Blob CDN forces download)
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const proto = req.headers['x-forwarded-proto'] || 'https';
+    rubricUrl = `${proto}://${host}/api/view?src=${encodeURIComponent(blob.url)}`;
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     return errorResponse(res, 500, 'Failed to upload HTML to storage');

@@ -79,16 +79,26 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Missing required field: blobUrl' });
   }
 
+  // If blobUrl is a viewer URL (/api/view?src=...), extract the underlying blob URL
+  let actualBlobUrl = blobUrl;
+  if (blobUrl.includes('/api/view?')) {
+    try {
+      const parsed = new URL(blobUrl);
+      const src = parsed.searchParams.get('src');
+      if (src) actualBlobUrl = src;
+    } catch { /* use blobUrl as-is */ }
+  }
+
   try {
-    assertSafeUrl(blobUrl);
+    assertSafeUrl(actualBlobUrl);
   } catch (err) {
     return res.status(400).json({ success: false, error: err.message });
   }
 
-  log('request_received', { endpoint: 'deactivate-tile', blobUrl });
+  log('request_received', { endpoint: 'deactivate-tile', blobUrl: actualBlobUrl });
 
   try {
-    await del(blobUrl);
+    await del(actualBlobUrl);
   } catch (err) {
     // del() is idempotent — it does not throw if the blob is already gone.
     // Any error here is unexpected (auth failure, network error, etc.).
