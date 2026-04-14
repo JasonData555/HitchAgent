@@ -134,6 +134,9 @@ export default async function handler(req, res) {
   }
 
   // ── Render HTML to PDF ────────────────────────────────────────────────────
+  // LOG POINT 2 — PDF generation start
+  log('pdf_render_start', { tileId });
+
   let pdfBuffer;
   try {
     pdfBuffer = await renderHtmlToPdf(htmlString, { bottomMargin: '0.1in' });
@@ -142,9 +145,13 @@ export default async function handler(req, res) {
     return errorResponse(res, 500, 'PDF generation failed');
   }
 
+  // LOG POINT 3 — PDF generation complete
   log('pdf_generated', { fileSize: pdfBuffer.length, tileId });
 
   // ── Upload to Vercel Blob ─────────────────────────────────────────────────
+  // LOG POINT 4 — Blob upload start
+  log('blob_upload_start', { pdfSize: pdfBuffer.length, tileId });
+
   let blobUrl;
   try {
     const { url } = await put(
@@ -161,12 +168,17 @@ export default async function handler(req, res) {
     return errorResponse(res, 500, 'Failed to upload PDF to storage');
   }
 
+  // LOG POINT 5 — Blob upload result
   log('blob_uploaded', { url: blobUrl, tileId });
 
   // ── Update Airtable attachment field ──────────────────────────────────────
+  // LOG POINT 6 — Airtable write start (log exact payload for diagnosis)
+  log('airtable_write_start', { field: 'Candidate Tile PDF', url: blobUrl, tileId });
+
+  let updateResult;
   try {
-    await updateRecord(TABLE, tileId, {
-      'Candidate Tile PDF': [{ url: blobUrl }],
+    updateResult = await updateRecord(TABLE, tileId, {
+      'Candidate Tile PDF': [{ url: blobUrl, filename: `candidate-tile-${tileId}.pdf` }],
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
@@ -177,7 +189,12 @@ export default async function handler(req, res) {
     );
   }
 
+  // LOG POINT 7 — Airtable write result (full response for diagnosis)
+  log('airtable_write_result', { result: JSON.stringify(updateResult), tileId });
   log('airtable_updated', { field: 'Candidate Tile PDF', tileId });
+
+  // LOG POINT 8 — Function exit
+  log('pdf_endpoint_complete', { status: 'success', tileId });
 
   return res.status(200).json({
     status: 'success',
