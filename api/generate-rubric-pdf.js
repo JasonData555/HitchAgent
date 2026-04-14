@@ -24,7 +24,7 @@ import { createRubricPdf } from '../lib/pdf-rubric.js';
 import { log } from '../lib/logger.js';
 
 const RUBRIC_TABLE     = process.env.RUBRIC_TABLE_ID || 'Rubric';
-const PDF_CONTENT_TYPE = 'application/pdf';
+const HTML_CONTENT_TYPE = 'text/html; charset=utf-8';
 const RUBRIC_ID_RE     = /^rec[A-Za-z0-9]{14}$/;
 
 function errorResponse(res, status, message) {
@@ -134,11 +134,11 @@ export default async function handler(req, res) {
   let blobUrl;
   try {
     const { url } = await put(
-      `rubrics/${rubricId}-${Date.now()}.pdf`,
+      `rubrics/${rubricId}-${Date.now()}.html`,
       pdfBuffer,
       {
         access: 'public',
-        contentType: PDF_CONTENT_TYPE,
+        contentType: HTML_CONTENT_TYPE,
       }
     );
     blobUrl = url;
