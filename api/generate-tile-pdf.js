@@ -167,7 +167,6 @@ export default async function handler(req, res) {
   try {
     await updateRecord(TABLE, tileId, {
       'Candidate Tile PDF': [{ url: blobUrl }],
-      'Tile PDF URL':       blobUrl,
       'Tile Status':        'Active',
     });
   } catch (err) {
