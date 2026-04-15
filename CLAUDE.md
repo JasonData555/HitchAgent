@@ -9,18 +9,24 @@ Internal tool for Hitch Partners. Generates branded candidate tile documents (Po
 ```
 api/
   generate-tile-draft.js   POST /api/generate-tile-draft   — Claude synthesis → Airtable
+  generate-tile-html.js    POST /api/generate-tile-html    — HTML tile generation → Vercel Blob → Airtable
   generate-tile-pptx.js    POST /api/generate-tile-pptx    — PPTX generation → Vercel Blob → Airtable
   generate-tile-pdf.js     POST /api/generate-tile-pdf     — PDF generation → Vercel Blob → Airtable
-  generate-rubric-draft.js POST /api/generate-rubric-draft — Rubric matrix + conflict narrative → Airtable
+  generate-rubric-draft.js POST /api/generate-rubric-draft — Rubric note synthesis → Airtable
+  generate-rubric-html.js  POST /api/generate-rubric-html  — HTML rubric generation → Vercel Blob → Airtable
   generate-rubric-pdf.js   POST /api/generate-rubric-pdf   — Rubric PDF → Vercel Blob → Airtable
+  deactivate-tile.js       POST /api/deactivate-tile       — Delete tile blob, clear tile_url
+  deactivate-rubric.js     POST /api/deactivate-rubric     — Delete rubric blob, clear rubric_url
+  view.js                  GET  /api/view                  — Proxy blob URL for inline browser rendering
 lib/
   airtable.js              Airtable REST client (getRecord, updateRecord, getFieldValue, getAttachmentUrl, getRecordsByFormula)
-  anthropic.js             Claude wrapper — builds prompt, calls API, parses JSON response; also generateRubricNarrative()
+  anthropic.js             Claude wrapper — builds prompt, calls API, parses JSON response; synthesizeRubricFields()
   fetch-image.js           Shared SSRF-guarded image fetcher (imageToBase64, guessMimeType)
   html-tile.js             Builds the HTML/CSS candidate tile document (for PDF rendering)
+  html-tile-web.js         Builds the self-contained interactive HTML candidate tile (for hosted page)
   pdf-extract.js           Downloads a PDF URL and extracts text (pdf-parse)
   pdf-render.js            Puppeteer wrapper — renders HTML string → PDF buffer; accepts { landscape, bottomMargin } options
-  pdf-rubric.js            Builds the HTML/CSS rubric alignment document (for PDF rendering)
+  pdf-rubric.js            Builds the HTML/CSS rubric alignment document (for PDF and HTML rendering)
   pptx-tile.js             Builds the one-slide PowerPoint (pptxgenjs)
   url-validate.js          SSRF guard — assertSafeUrl() allowlist validator
   logger.js                Structured JSON logger (stdout → Vercel function logs)
@@ -94,7 +100,8 @@ Fields **written** by the app:
 | `Tile Draft Status` | Draft endpoint (`Draft Ready` / `Draft Error`) |
 | `Candidate Tile PowerPoint` | PPTX endpoint (attachment URL array) |
 | `Candidate Tile PDF` | PDF endpoint (attachment URL array) |
-| `tile_url` | PDF endpoint (plain text URL string) |
+| `tile_url` | HTML endpoint (plain text URL string) |
+| `Tile Status` | HTML endpoint (`Active`) |
 
 **Airtable schema prerequisites** (must be configured in Airtable UI before deploying):
 - Rename `Current Situation` → `Situation` in Candidate Tile table
@@ -106,7 +113,7 @@ Fields **written** by the app:
 - Add `Candidate Tile PDF` (Attachment) to Candidate Tile table
 - Add `tile_url` (URL or Text) to Candidate Tile table
 
-**Tile Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → PPTX and/or PDF generated.
+**Tile Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → HTML, PPTX, and/or PDF generated.
 
 **Rubric-aware tile drafts:** The draft endpoint optionally fetches the linked Rubric Matrix JSON and priority fields (`Must Have`, `Nice to Have`, `Red Flags`) for the associated Search. The join path is `Candidate Tile.Project` (linked record) → Search record ← `Rubric.Client` (linked record). When priority fields are present, Claude performs a structured evaluation before generating output (see Claude Integration). If no linked Rubric exists or fields are empty, the draft is generated from candidate data alone (graceful degradation, no error).
 
@@ -118,25 +125,41 @@ Fields read by the rubric endpoints:
 
 | Field | Type | Used by |
 |---|---|---|
-| `client_name` | Text | Draft + PDF endpoints |
+| `client_name` | Text | Draft + HTML + PDF endpoints |
 | `Search` | Text | Draft endpoint (links to ITI Input records) |
-| `Rubric Matrix JSON` | Long text | PDF endpoint (parsed from draft output) |
-| `Rubric Draft Status` | Single select | Both endpoints (read + write) |
+| `Rubric Draft Status` | Single select | All endpoints (read + write) |
+| `Must Have` | Long text | HTML + PDF endpoints |
+| `Nice to Have` | Long text | HTML + PDF endpoints |
+| `Red Flags` | Long text | HTML + PDF endpoints |
+| `Success in the Role` | Long text | HTML + PDF endpoints |
+| `Functional Responsibilities` | Long text | HTML + PDF endpoints |
+| `Location` | Text | HTML + PDF endpoints |
+| `Current Team Size` | Text | HTML + PDF endpoints |
+| `Est. Team Size in 18-24 Months` | Text | HTML + PDF endpoints |
+| `Position Reports To` | Text | HTML + PDF endpoints |
+| `client_logo` | Attachment | HTML + PDF endpoints |
 
 Fields **written** by the rubric endpoints:
 
 | Field | Written by |
 |---|---|
-| `Rubric Matrix JSON` | Draft endpoint (nested JSON: active domains, panel members, scores, conflicts) |
-| `Conflict Narrative` | Draft endpoint (Claude-generated 2–3 sentence summary) |
+| `Must Have` | Draft endpoint (Claude synthesis output) |
+| `Nice to Have` | Draft endpoint (Claude synthesis output) |
+| `Red Flags` | Draft endpoint (Claude synthesis output) |
+| `Success in the Role` | Draft endpoint (Claude synthesis output) |
+| `Functional Responsibilities` | Draft endpoint (Claude synthesis output) |
 | `Rubric Draft Status` | Draft endpoint (`Draft Ready` / `Draft Error`) |
 | `Rubric PDF` | PDF endpoint (attachment URL array) |
-| `rubric_url` | PDF endpoint (plain text URL string) |
+| `rubric_url` | HTML endpoint (plain text URL string) |
+| `Rubric URL Status` | HTML endpoint (`Active`) |
 
-**Rubric Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → PDF generated.
+**Rubric Draft Status lifecycle:** `Not Started` → `Draft Ready` → `Approved` (PM approves in Airtable) → HTML and/or PDF generated.
 
 **Rubric schema prerequisites** (must be configured in Airtable UI):
-- Add `rubric_url` (URL or Text) to Rubric table
+- Add `Must Have`, `Nice to Have`, `Red Flags`, `Success in the Role`, `Functional Responsibilities` (Long text) to Rubric table
+- Add `Location`, `Current Team Size`, `Est. Team Size in 18-24 Months`, `Position Reports To` (Text) to Rubric table
+- Add `client_logo` (Attachment) to Rubric table
+- Add `rubric_url` (URL or Text) and `Rubric URL Status` (Single select) to Rubric table
 
 ---
 
@@ -209,25 +232,47 @@ Resume parse failures are non-fatal — draft is still generated with a warning 
 
 The PPTX and PDF endpoints are independent — either or both can be triggered for any Approved tile.
 
+### POST /api/generate-tile-html
+
+1. Fetches the Candidate Tile record from Airtable
+2. Validates `Tile Draft Status === 'Approved'`
+3. Downloads logo + profile photo as base64 data URIs in parallel (non-fatal if unavailable)
+4. Generates a self-contained interactive HTML page via `lib/html-tile-web.js` (expandable sections, modal viewer, print CSS)
+5. Uploads to Vercel Blob (`tiles/<recordId>-<timestamp>.html`, public access)
+6. Proxies the URL through `/api/view` so the browser renders HTML inline
+7. Updates Airtable `tile_url` (proxy URL) and sets `Tile Status: Active`
+8. Returns `{ status, message, data: { tileId, candidateName, htmlUrl }, warnings }`
+
 ### POST /api/generate-rubric-draft
 
 1. Fetches the Rubric record from Airtable
 2. Validates status is not `Approved` (prevents overwriting)
-3. Fetches all linked ITI Input records via formula query: `{search_project} = "<searchName>"`; requires ≥ 2 panel members
-4. Parses scores for all 12 security leadership domains per panel member
-5. Identifies conflicts: domains where ≥ 2 panel members scored it and max − min spread ≥ 2
-6. Calls Claude (`claude-sonnet-4-6`, max 800 tokens) to generate a 3–5 sentence senior-recruiter conflict narrative (names interviewers for disagreements, surfaces note themes, flags score/commentary tension)
-7. Writes `Rubric Matrix JSON`, `Conflict Narrative`, and `Rubric Draft Status: Draft Ready` back to Airtable
-8. Returns `{ status, message, data: { rubricId, clientName, panelMemberCount, domainsIncluded, conflictsFound }, warnings }`
+3. Fetches all linked ITI Input records via formula query: `{search_project} = "<searchName>"`; requires ≥ 1 panel member
+4. Collects `panel_member` and `Notes` per ITI Input record
+5. Calls Claude (`claude-haiku-4-5-20251001`, max 2,000 tokens) via `synthesizeRubricFields()` to synthesize five structured fields from interviewer notes (handles 1 or more interviewers)
+6. Writes `Must Have`, `Nice to Have`, `Red Flags`, `Success in the Role`, `Functional Responsibilities`, and `Rubric Draft Status: Draft Ready` back to Airtable
+7. Returns `{ status, message, data: { rubricId, clientName, panelMemberCount, fieldsWritten }, warnings }`
+
+### POST /api/generate-rubric-html
+
+1. Fetches the Rubric record from Airtable
+2. Validates `Rubric Draft Status === 'Approved'`
+3. Reads all five content fields plus context fields (Location, Team Size, Reports To) from the fresh fetch
+4. Downloads Hitch logo + optional client logo as base64 data URIs in parallel (non-fatal if unavailable)
+5. Generates HTML document via `lib/pdf-rubric.js`
+6. Uploads to Vercel Blob (`rubrics/<recordId>-<timestamp>.html`, public access)
+7. Proxies the URL through `/api/view` so the browser renders HTML inline
+8. Updates Airtable `rubric_url` (proxy URL) and sets `Rubric URL Status: Active`
+9. Returns `{ status, message, data: { rubricId, clientName, rubricUrl }, warnings }`
 
 ### POST /api/generate-rubric-pdf
 
 1. Fetches the Rubric record from Airtable
 2. Validates `Rubric Draft Status === 'Approved'`
-3. Parses `Rubric Matrix JSON` (must be valid JSON)
+3. Reads all five content fields plus context fields from the fresh fetch
 4. Downloads Hitch logo + optional client logo as base64 in parallel (10s timeout each; SSRF-guarded); missing logos fall back silently to text labels
-5. Generates HTML document via `lib/pdf-rubric.js` (inline CSS, dynamic column/font sizing, data URI images, conflict indicators)
-6. Renders HTML → PDF buffer via Puppeteer (`lib/pdf-render.js`) — Letter landscape, 0.5in top/sides, 0.1in bottom margin
+5. Generates HTML document via `lib/pdf-rubric.js`
+6. Renders HTML → PDF buffer via Puppeteer (`lib/pdf-render.js`) — Letter portrait, 0.5in top/sides, 0.6in bottom margin
 7. Uploads to Vercel Blob (`rubrics/<rubricId>-<timestamp>.pdf`, public access)
 8. Updates Airtable `Rubric PDF` attachment field with the blob URL
 9. Returns `{ status, message, data: { rubricId, clientName, pdfUrl }, warnings }`
@@ -270,13 +315,7 @@ Evidence quality standard (applied in steps 1–2):
 
 All three calibration blocks gate on `hasPriorities`/`mustHave`/`redFlags` being truthy — graceful degradation to generic instructions when Rubric data is absent.
 
-**Rubric narrative generation:** Separate `generateRubricPriorityText()` export in `lib/anthropic.js`. Uses `claude-haiku-4-5-20251001`, max 800 tokens. Returns `{ mustHave, niceToHave, redFlags }` as semicolon-delimited narrative strings. Separate `generateRubricNarrative()` export uses `claude-sonnet-4-6`, max 800 tokens, plain-text output. Returns a 3–5 sentence paragraph. Prompt instructions:
-- Write for a **senior recruiter** audience preparing for a client debrief
-- Describe where interviewers were in strong alignment (scores + note themes)
-- Name interviewers when describing meaningful disagreement or specific perspectives
-- Surface themes appearing across multiple interviewers' notes
-- Flag tension between high scores and qualifying commentary
-- Notes passed to Claude are attributed per interviewer (`Name:\nnotes`)
+**Rubric field synthesis:** `synthesizeRubricFields()` export in `lib/anthropic.js`. Uses `claude-haiku-4-5-20251001`, max 2,000 tokens. Accepts `clientName`, `searchName`, and an array of `{ name, notes }` objects (one per ITI Input record). Explicitly handles 1 or more interviewers — if only one is provided, synthesis is based entirely on that input. Returns `{ mustHave, niceToHave, redFlags, successInRole, functionalResponsibility }` as hyphen-bulleted plain text strings. Notes are attributed per interviewer (`Name:\nnotes`) and passed inside `<interviewer_notes>` XML delimiters. `generateRubricPriorityText()` (deprecated) and `generateRubricNarrative()` remain in the file but are no longer called by active endpoints.
 
 ---
 
@@ -359,57 +398,30 @@ Letter portrait (8.5" × 11"), 0.5in top/sides + 0.1in bottom margin, Arial/Helv
 
 ---
 
-## Rubric PDF Layout
+## Rubric HTML/PDF Layout
 
-Letter **landscape** (11" × 8.5"), 0.5in top/sides + 0.1in bottom margin. Generated by Puppeteer. Defined in `lib/pdf-rubric.js`. Calls `renderHtmlToPdf(html, { landscape: true, bottomMargin: '0.1in' })`.
+Letter **portrait** (8.5" × 11"), 0.5in top/sides + 0.6in bottom margin. HTML and PDF share the same `lib/pdf-rubric.js` template (`buildRubricDocument()`). PDF calls `renderHtmlToPdf(html, { landscape: false, bottomMargin: '0.6in' })`.
 
 **Color palette** (matches Candidate Tile):
 - `NAVY #1B365D` — headings, domain names, table headers
 - `SLATE #64748B` — body text, narrative
 - `ACCENT #0EA5E9` — header divider line, footer bar
 - `WHITE #FFFFFF` — background, footer text
-- `RED #DC2626` — conflict indicator circle ("!")
-- Score cells: teal/cyan/gray/red gradient (5 = Must Have → 1 = Not Important)
 
-**Dynamic sizing** based on panel member count (n):
 
-| n | Header font | Score font | Title font | Domain col (left) |
-|---|---|---|---|---|
-| ≤ 3 | 11px | 10px | 9px | 150px |
-| 4 | 10px | 9px | 8px | 150px |
-| ≥ 5 | 9px | 8px | 7.5px | 130px |
-
-**HTML structure (landscape two-column):**
+**HTML structure:**
 ```
-Section A: .header        (flex row: Hitch logo | "Role Requirements Alignment" | client logo)
-           .accent-line   (3px blue)
-Section B: .top-data-table (full width, 960px)
-             - Panel member columns (B_LABEL_W=180px, B_PANEL_W=floor((960-180)/n))
-             - Context rows: Position reports to, Current team size,
-               Est. team size in 18 months, Location
-Section C: .two-col        (flex row, gap 10px)
-  .col-left  (62%, ~595px):
-    .matrix-table  (DOMAIN_W + n×PANEL_W + CONFLICT_W=30px)
-    .legend        (conflict icon note + score color key)
-  .col-right (38%):
-    .priority-section × 3 (Must Have avg≥4.0 / Nice to Have 3.0–3.9 / Not Important <3.0)
-      - Domains sorted descending by average score within each tier
-Section D: .divider + .summary-title "CONFLICT NARRATIVE" + .narrative
-Footer:    position:fixed; bottom:10px; height:26px; blue ACCENT bar
+.header         (flex row: Hitch logo | title | client logo)
+.accent-line    (3px blue)
+.context-bar    (Position Reports To | Current Team Size | Est. Team Size | Location)
+.content        (five sections: Must Have, Nice to Have, Red Flags, Success in Role, Functional Responsibilities)
+.footer         (position:fixed; bottom:10px; navy bar + italic text)
 ```
-
-**Column width formulas:**
-- Section B: `B_LABEL_W=180`, `B_PANEL_W=floor((960-180)/n)`
-- Section C left (595px): `DOMAIN_W=n>=5?130:150`, `CONFLICT_W=30`, `PANEL_W=floor((595-DOMAIN_W-30)/n)`
-
-**Footer positioning:** `position: fixed; bottom: 10px` is content-area-relative. With 0.1in bottom margin, content area = 758px; footer sits at y: 722–748px. `padding-bottom: 36px` on `.page-wrapper` ensures content ends at 722px (no overlap). White space below footer ≈ 10px (the bottom margin).
 
 **Key implementation details:**
-- `parseScoreNum()` handles both numeric strings ("5 - Must have") and plain text labels via `TEXT_SCORE_MAP`
-- `calcDomainAverages()` drives the priority section tiers
-- `Rubric Matrix JSON` structure: `{ activeDomains, panelMembers[{name,title,reportsTo,teamSizeToday,teamSize18Months,location,scores}], contextRows, conflicts }`
-- Panel member column headers use "First L." format
-- Logos embedded as base64; missing logos fall back to text labels (soft failure)
+- `buildRubricDocument({ clientName, searchName, location, currentTeamSize, teamSize18Months, positionReportsTo, mustHave, niceToHave, redFlags, successInRole, functionalResponsibility, hitchLogoDataUri, clientLogoDataUri })` — all content sourced from fresh Airtable fetch at generation time
+- Content fields rendered as hyphen-bulleted lists with `**bold**` labels converted to `<strong>`
+- Logos embedded as base64 data URIs; missing logos fall back to text labels (soft failure)
 - Same Puppeteer request-interception security model as Candidate Tile PDF
 
 ---
@@ -467,9 +479,25 @@ curl -X POST http://localhost:3000/api/generate-tile-pdf \
   -d '{"tileId": "recXXXXXXXXXXXXXX"}'
 ```
 
-**Test rubric draft generation** (requires ≥ 2 linked ITI Input records):
+**Test tile HTML generation** (tile must be `Approved` first):
+```bash
+curl -X POST http://localhost:3000/api/generate-tile-html \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <INTERNAL_API_KEY>" \
+  -d '{"tileId": "recXXXXXXXXXXXXXX"}'
+```
+
+**Test rubric draft generation** (requires ≥ 1 linked ITI Input record):
 ```bash
 curl -X POST http://localhost:3000/api/generate-rubric-draft \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <INTERNAL_API_KEY>" \
+  -d '{"rubricId": "recXXXXXXXXXXXXXX"}'
+```
+
+**Test rubric HTML generation** (rubric must be `Approved` first):
+```bash
+curl -X POST http://localhost:3000/api/generate-rubric-html \
   -H "Content-Type: application/json" \
   -H "x-api-key: <INTERNAL_API_KEY>" \
   -d '{"rubricId": "recXXXXXXXXXXXXXX"}'
@@ -504,7 +532,9 @@ Vercel Blob store must be linked to the project (auto-injects `BLOB_READ_WRITE_T
 
 Standard event names: `request_received`, `airtable_fetch_complete`, `pdf_parse_complete`, `pdf_parse_failed`, `claude_api_called`, `claude_api_complete`, `pptx_generated`, `pdf_generated`, `blob_uploaded`, `airtable_updated`, `error`.
 
-Rubric-specific events: `rubric_fetch_complete`, `iti_records_fetched`, `rubric_matrix_built`, `rubric_narrative_complete`, `rubric_pdf_generated`.
+Tile HTML events: `tile_html_generated`.
+
+Rubric-specific events: `rubric_fetch_complete`, `iti_records_fetched`, `rubric_narrative_complete`, `rubric_pdf_generated`.
 
 ---
 
@@ -532,8 +562,7 @@ The `airtable.js` client retries on HTTP 429 with exponential backoff: 1s → 2s
 | Airtable save failure | 500 | Failed to save draft / PPTX/PDF generated but failed to save to Airtable |
 | Resume parse failure | 200 + warning | Draft still generated; warning in response |
 | Rubric not found | 404 | Rubric record not found |
-| Fewer than 2 ITI Input records | 400 | At least 2 panel members required |
-| Invalid Rubric Matrix JSON | 400 | Invalid or missing Rubric Matrix JSON |
+| No ITI Input records (0 found) | 400 | Rubric must have at least 1 panel member input |
 | Status = Approved (rubric draft endpoint) | 400 | Cannot overwrite approved rubric content... |
 | Status ≠ Approved (rubric PDF endpoint) | 400 | Cannot generate PDF: rubric status is '...' |
 | Claude rubric narrative failure | 500 | Rubric narrative generation failed |
