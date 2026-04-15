@@ -2,15 +2,15 @@
  * POST /api/generate-rubric-pdf
  *
  * Triggered by an Airtable automation or button webhook (after PM approves the rubric draft).
- * Generates a Role Requirements Brief PDF, uploads it to Vercel Blob,
- * and saves the URL back to the "Rubric PDF URL" field on the Rubric record.
+ * Generates a Role Requirements Alignment PDF via Puppeteer, uploads it to Vercel Blob,
+ * and saves the URL as an attachment in the "Rubric PDF" field on the Rubric record.
  *
  * Required header: x-api-key
  * Body: { "rubricId": "recXXXXXXXX" }
  * Requires: Rubric Draft Status = "Approved"
  *
- * Airtable prerequisite: add a field named "Rubric PDF URL" (URL or Text type)
- * to the Rubric table before using this endpoint.
+ * Airtable prerequisites:
+ *   - "Rubric PDF" (Attachment) field on the Rubric table
  *
  * Environment variables (in addition to shared ones in CLAUDE.md):
  *   RUBRIC_TABLE_ID  — Airtable table name/ID for the Rubric table
@@ -20,12 +20,13 @@
 import { timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
-import { createRubricPdf } from '../lib/pdf-rubric.js';
+import { buildRubricDocument } from '../lib/pdf-rubric.js';
+import { renderHtmlToPdf } from '../lib/pdf-render.js';
+import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
 import { log } from '../lib/logger.js';
 
-const RUBRIC_TABLE     = process.env.RUBRIC_TABLE_ID || 'Rubric';
-const HTML_CONTENT_TYPE = 'text/html; charset=utf-8';
-const RUBRIC_ID_RE     = /^rec[A-Za-z0-9]{14}$/;
+const RUBRIC_TABLE = process.env.RUBRIC_TABLE_ID || 'Rubric';
+const RUBRIC_ID_RE = /^rec[A-Za-z0-9]{14}$/;
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -71,7 +72,7 @@ export default async function handler(req, res) {
   try {
     record = await getRecord(RUBRIC_TABLE, rubricId);
   } catch (err) {
-    log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    log('error', { step: 'airtable_fetch', error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     return errorResponse(res, 404, `Rubric not found: ${rubricId}`);
   }
 
@@ -105,10 +106,24 @@ export default async function handler(req, res) {
 
   log('airtable_fetch_complete', { rubricId, clientName });
 
-  // ── Generate PDF ──────────────────────────────────────────────────────────
-  let pdfBuffer;
+  // ── Fetch logos as base64 data URIs (non-fatal if unavailable) ────────────
+  const warnings = [];
+  const [hitchLogoDataUri, clientLogoDataUri] = await Promise.all([
+    hitchLogoUrl
+      ? imageToBase64(hitchLogoUrl, guessMimeType(hitchLogoUrl)).catch(() => null)
+      : Promise.resolve(null),
+    clientLogoUrl
+      ? imageToBase64(clientLogoUrl, guessMimeType(clientLogoUrl)).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  if (!hitchLogoDataUri)  warnings.push('Hitch logo unavailable; using text fallback');
+  if (!clientLogoDataUri && clientLogoUrl) warnings.push('Client logo unavailable; using text fallback');
+
+  // ── Build HTML document ───────────────────────────────────────────────────
+  let htmlString;
   try {
-    pdfBuffer = await createRubricPdf({
+    htmlString = buildRubricDocument({
       clientName,
       searchName,
       location,
@@ -120,46 +135,55 @@ export default async function handler(req, res) {
       redFlags,
       successInRole,
       functionalResponsibility: functionalResp,
-      hitchLogoUrl,
-      clientLogoUrl,
+      hitchLogoDataUri,
+      clientLogoDataUri,
     });
   } catch (err) {
-    log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(res, 500, 'Rubric PDF generation failed');
+    log('error', { step: 'html_generation', error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, 'Rubric HTML generation failed');
+  }
+
+  // ── Render HTML → PDF via Puppeteer ───────────────────────────────────────
+  let pdfBuffer;
+  try {
+    pdfBuffer = await renderHtmlToPdf(htmlString, { landscape: false, bottomMargin: '0.6in' });
+  } catch (err) {
+    log('error', { step: 'pdf_render', error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, 'Rubric PDF render failed');
   }
 
   log('rubric_pdf_generated', { fileSize: pdfBuffer.length, rubricId });
 
-  // ── Upload to Vercel Blob ─────────────────────────────────────────────────
-  let blobUrl;
+  // ── Upload PDF to Vercel Blob ─────────────────────────────────────────────
+  let pdfUrl;
   try {
     const { url } = await put(
-      `rubrics/${rubricId}-${Date.now()}.html`,
+      `rubrics/${rubricId}-${Date.now()}.pdf`,
       pdfBuffer,
       {
         access: 'public',
-        contentType: HTML_CONTENT_TYPE,
+        contentType: 'application/pdf',
       }
     );
-    blobUrl = url;
+    pdfUrl = url;
   } catch (err) {
-    log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    log('error', { step: 'pdf_upload', error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     return errorResponse(res, 500, 'Failed to upload rubric PDF to storage');
   }
 
-  log('blob_uploaded', { url: blobUrl, rubricId });
+  log('blob_uploaded', { type: 'pdf', url: pdfUrl, rubricId });
 
-  // ── Write URL back to Airtable ────────────────────────────────────────────
+  // ── Write attachment to Airtable ──────────────────────────────────────────
   try {
     await updateRecord(RUBRIC_TABLE, rubricId, {
-      'Rubric PDF URL': blobUrl,
+      'Rubric PDF': [{ url: pdfUrl, filename: `rubric-${rubricId}.pdf` }],
     });
   } catch (err) {
-    log('error', { error: err.message, blobUrl, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(res, 500, `PDF generated but failed to save to Airtable: ${blobUrl}`);
+    log('error', { step: 'airtable_write_pdf', error: err.message, pdfUrl, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    return errorResponse(res, 500, `PDF generated but failed to save to Airtable: ${pdfUrl}`);
   }
 
-  log('airtable_updated', { field: 'Rubric PDF URL', rubricId });
+  log('airtable_updated', { field: 'Rubric PDF', rubricId });
 
   return res.status(200).json({
     status: 'success',
@@ -167,8 +191,8 @@ export default async function handler(req, res) {
     data: {
       rubricId,
       clientName,
-      pdfUrl: blobUrl,
+      pdfUrl,
     },
-    warnings: [],
+    warnings,
   });
 }

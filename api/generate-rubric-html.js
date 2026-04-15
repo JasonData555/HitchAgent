@@ -17,8 +17,8 @@
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
-import { createRubricHtml } from '../lib/html-rubric.js';
-import { imageToBase64 } from '../lib/fetch-image.js';
+import { buildRubricDocument } from '../lib/pdf-rubric.js';
+import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
 import { log } from '../lib/logger.js';
 
 const RUBRIC_TABLE = process.env.RUBRIC_TABLE_ID || 'Rubric';
@@ -106,8 +106,8 @@ export default async function handler(req, res) {
   const clientLogoUrl = getAttachmentUrl(fields, 'client_logo');
 
   const [hitchLogoDataUri, clientLogoDataUri] = await Promise.all([
-    hitchLogoUrl  ? imageToBase64(hitchLogoUrl,  'image/png') : Promise.resolve(''),
-    clientLogoUrl ? imageToBase64(clientLogoUrl, 'image/png') : Promise.resolve(''),
+    hitchLogoUrl  ? imageToBase64(hitchLogoUrl,  guessMimeType(hitchLogoUrl)).catch(() => null)  : Promise.resolve(null),
+    clientLogoUrl ? imageToBase64(clientLogoUrl, guessMimeType(clientLogoUrl)).catch(() => null) : Promise.resolve(null),
   ]);
 
   if (!hitchLogoDataUri)  warnings.push('Hitch logo could not be loaded; using text fallback');
@@ -116,7 +116,7 @@ export default async function handler(req, res) {
   // ── Generate HTML ─────────────────────────────────────────────────────────
   let htmlString;
   try {
-    htmlString = createRubricHtml({
+    htmlString = buildRubricDocument({
       clientName,
       searchName,
       location,
