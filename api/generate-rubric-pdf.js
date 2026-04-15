@@ -97,8 +97,8 @@ export default async function handler(req, res) {
   const successInRole     = getFieldValue(fields, 'Success in the Role', '');
   const functionalResp    = getFieldValue(fields, 'Functional Responsibilities', '');
   const location          = getFieldValue(fields, 'Location', '');
-  const currentTeamSize   = getFieldValue(fields, 'Current Team Size', '');
-  const teamSize18Months  = getFieldValue(fields, 'Est. Team Size in 18-24 Months', '');
+  const currentTeamSize   = getFieldValue(fields, 'Team Size Today', '');
+  const teamSize18Months  = getFieldValue(fields, 'Est Team Size 18 - 24 mo', '');
 
   const hitchLogoUrl  = process.env.HITCH_LOGO_URL || null;
   const clientLogoUrl = getAttachmentUrl(fields, 'client_logo') || null;

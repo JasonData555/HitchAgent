@@ -136,8 +136,8 @@ Fields read by the rubric endpoints:
 | `Success in the Role` | Long text | HTML + PDF endpoints |
 | `Functional Responsibilities` | Long text | HTML + PDF endpoints |
 | `Location` | Text | HTML + PDF endpoints |
-| `Current Team Size` | Text | HTML + PDF endpoints |
-| `Est. Team Size in 18-24 Months` | Text | HTML + PDF endpoints |
+| `Team Size Today` | Text | HTML + PDF endpoints |
+| `Est Team Size 18 - 24 mo` | Text | HTML + PDF endpoints |
 | `client_logo` | Attachment | HTML + PDF endpoints |
 
 Fields **written** by the rubric endpoints:
@@ -158,7 +158,7 @@ Fields **written** by the rubric endpoints:
 
 **Rubric schema prerequisites** (must be configured in Airtable UI):
 - Add `Must Have`, `Nice to Have`, `Red Flags`, `Success in the Role`, `Functional Responsibilities` (Long text) to Rubric table
-- Add `Location`, `Current Team Size`, `Est. Team Size in 18-24 Months` (Text) to Rubric table
+- Add `Location`, `Team Size Today`, `Est Team Size 18 - 24 mo` (Text) to Rubric table
 - Add `client_logo` (Attachment) to Rubric table
 - Add `rubric_url` (URL or Text) and `Rubric URL Status` (Single select) to Rubric table
 
@@ -412,7 +412,7 @@ Letter **portrait** (8.5" × 11"), 0.5in top/sides + 0.6in bottom margin. HTML a
 ```
 .header         (flex row: Hitch logo | title | client logo)
 .accent-line    (3px blue)
-.context-bar    (Position | Location | Current Team Size | Est. Team Size 18-24 Mo)
+.context-bar    (Position | Location | Team Size Today | Est Team Size 18 - 24 mo)
 .content        (five sections: Must Have, Nice to Have, Red Flags, Success in Role, Functional Responsibilities)
 .footer         (position:fixed; bottom:10px; navy bar + italic text)
 ```

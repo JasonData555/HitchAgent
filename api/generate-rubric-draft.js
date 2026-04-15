@@ -157,7 +157,7 @@ export default async function handler(req, res) {
       rubricId,
       clientName,
       panelMemberCount: itiRecords.length,
-      fieldsWritten: ['Must Have', 'Nice to Have', 'Red Flags', 'Success in Role', 'Functional Responsibility'],
+      fieldsWritten: ['Must Have', 'Nice to Have', 'Red Flags', 'Success in the Role', 'Functional Responsibilities'],
     },
     warnings: [],
   });
