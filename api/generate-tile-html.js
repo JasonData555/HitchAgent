@@ -2,15 +2,16 @@
  * POST /api/generate-tile-html
  *
  * Triggered by an Airtable automation or button webhook (after PM approves the
- * tile draft). Generates a self-contained HTML candidate profile page, uploads
- * it to Vercel Blob as a public HTML file, and saves the URL back to Airtable.
+ * tile draft). Constructs a permanent record-ID-based URL pointing to the
+ * /api/tile-view rendering endpoint, and saves it back to Airtable on first run.
+ * Subsequent runs for the same record are idempotent — the URL is never overwritten.
  *
  * Required header: x-api-key
  * Body: { "tileId": "recXXXXXXXX" }
  * Requires: Tile Draft Status = "Approved"
  *
- * Writes to Airtable:
- *   tile_url    — public HTML blob URL
+ * Writes to Airtable (first run only for tile_url):
+ *   tile_url    — permanent URL: /api/tile-view?id=<tileId>
  *   Tile Status — "Active"
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -44,15 +45,14 @@
  *   PM visibility.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * DEACTIVATION
+ * DEACTIVATION & REACTIVATION
  * ─────────────────────────────────────────────────────────────────────────────
- * The existing "Deactivate Tile" automation and api/deactivate-tile.js endpoint
- * work unchanged — they read tile_url and delete the blob, which is format-
- * agnostic (.html blobs deactivate identically to .pdf blobs).
+ * Deactivation is enforced by the "Tile Status" field. Setting it to
+ * "Deactivated" causes /api/tile-view to return the unavailable page immediately.
+ * Reactivation is automatic — set "Tile Status" back to "Active" in Airtable.
  */
 
 import { timingSafeEqual } from 'crypto';
-import { put } from '@vercel/blob';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { createCandidateTileWebHtml } from '../lib/html-tile-web.js';
 import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
@@ -60,7 +60,6 @@ import { log } from '../lib/logger.js';
 
 const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
 const TILE_ID_RE = /^rec[A-Za-z0-9]{14}$/;
-const HTML_CONTENT_TYPE = 'text/html';
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -190,31 +189,28 @@ export default async function handler(req, res) {
 
   log('tile_html_generated', { fileSize: htmlString.length, tileId });
 
-  // ── Upload to Vercel Blob ──────────────────────────────────────────────────
-  let htmlUrl;
-  try {
-    const filename = `tiles/${tileId}-${Date.now()}.html`;
-    const blob = await put(filename, htmlString, {
-      access: 'public',
-      contentType: HTML_CONTENT_TYPE,
-    });
-    // Serve via proxy so browser renders HTML inline (Vercel Blob CDN forces download)
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    const proto = req.headers['x-forwarded-proto'] || 'https';
-    htmlUrl = `${proto}://${host}/api/view?src=${encodeURIComponent(blob.url)}`;
-  } catch (err) {
-    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(res, 500, 'Failed to upload HTML to storage');
-  }
+  // ── Build permanent URL (record-ID-based, never changes) ────────────────────
+  // The URL points to /api/tile-view which renders live content on every
+  // request. It is written to Airtable only once — subsequent generation runs
+  // for the same record are idempotent and do not overwrite the existing URL.
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const proto = req.headers['x-forwarded-proto'] || 'https';
+  const permanentUrl = `${proto}://${host}/api/tile-view?id=${tileId}`;
 
-  log('blob_uploaded', { url: htmlUrl, tileId });
+  // Only write tile_url if the field is not already populated.
+  const existingUrl = getFieldValue(fields, 'tile_url', '');
+  const htmlUrl = existingUrl || permanentUrl;
+
+  log('tile_url_set', { tileId, htmlUrl, isNew: !existingUrl });
 
   // ── Write URL back to Airtable ────────────────────────────────────────────
+  // Always set Tile Status to Active. Only write tile_url if not already set —
+  // the permanent URL never changes across regenerations.
+  const fieldsToWrite = { 'Tile Status': 'Active' };
+  if (!existingUrl) fieldsToWrite.tile_url = permanentUrl;
+
   try {
-    await updateRecord(TABLE, tileId, {
-      tile_url:      htmlUrl,
-      'Tile Status': 'Active',
-    });
+    await updateRecord(TABLE, tileId, fieldsToWrite);
   } catch (err) {
     log('error', { error: err.message, htmlUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     return errorResponse(res, 500, `HTML generated but failed to save to Airtable: ${htmlUrl}`);

@@ -2,8 +2,9 @@
  * POST /api/generate-rubric-html
  *
  * Triggered by an Airtable automation or button webhook (after PM approves the rubric draft).
- * Generates a self-contained HTML role requirements brief, uploads it to Vercel Blob,
- * and saves the public URL back to the "rubric_url" field on the Rubric record.
+ * Constructs a permanent record-ID-based URL pointing to the /api/rubric-view rendering
+ * endpoint, and saves it back to the "rubric_url" field on the Rubric record on first run.
+ * Subsequent runs for the same record are idempotent — the URL is never overwritten.
  *
  * Required header: x-api-key
  * Body: { "rubricId": "recXXXXXXXX" }
@@ -14,8 +15,7 @@
  *   HITCH_LOGO_URL   — Public HTTPS URL for the Hitch Partners logo PNG
  */
 
-import { randomUUID, timingSafeEqual } from 'crypto';
-import { put } from '@vercel/blob';
+import { timingSafeEqual } from 'crypto';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { buildRubricDocument } from '../lib/pdf-rubric.js';
 import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
@@ -23,7 +23,6 @@ import { log } from '../lib/logger.js';
 
 const RUBRIC_TABLE = process.env.RUBRIC_TABLE_ID || 'Rubric';
 const RUBRIC_ID_RE = /^rec[A-Za-z0-9]{14}$/;
-const HTML_CONTENT_TYPE = 'text/html';
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -96,7 +95,6 @@ export default async function handler(req, res) {
   const location               = getFieldValue(fields, 'Location', '');
   const currentTeamSize        = getFieldValue(fields, 'Current Team Size', '');
   const teamSize18Months       = getFieldValue(fields, 'Est. Team Size in 18-24 Months', '');
-  const positionReportsTo      = getFieldValue(fields, 'Position Reports To', '');
 
   log('airtable_fetch_complete', { rubricId, clientName });
 
@@ -122,7 +120,6 @@ export default async function handler(req, res) {
       location,
       currentTeamSize,
       teamSize18Months,
-      positionReportsTo,
       mustHave,
       niceToHave,
       redFlags,
@@ -136,31 +133,28 @@ export default async function handler(req, res) {
     return errorResponse(res, 500, 'HTML generation failed');
   }
 
-  // ── Upload to Vercel Blob ─────────────────────────────────────────────────
-  let rubricUrl;
-  try {
-    const filename = `rubrics/${rubricId}-${Date.now()}.html`;
-    const blob = await put(filename, htmlString, {
-      access: 'public',
-      contentType: HTML_CONTENT_TYPE,
-    });
-    // Serve via proxy so browser renders HTML inline (Vercel Blob CDN forces download)
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    const proto = req.headers['x-forwarded-proto'] || 'https';
-    rubricUrl = `${proto}://${host}/api/view?src=${encodeURIComponent(blob.url)}`;
-  } catch (err) {
-    log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(res, 500, 'Failed to upload HTML to storage');
-  }
+  // ── Build permanent URL (record-ID-based, never changes) ────────────────────
+  // The URL points to /api/rubric-view which renders live content on every
+  // request. It is written to Airtable only once — subsequent generation runs
+  // for the same record are idempotent and do not overwrite the existing URL.
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const proto = req.headers['x-forwarded-proto'] || 'https';
+  const permanentUrl = `${proto}://${host}/api/rubric-view?id=${rubricId}`;
 
-  log('rubric_pdf_generated', { rubricId, rubricUrl });
+  // Only write rubric_url if the field is not already populated.
+  const existingUrl = getFieldValue(fields, 'rubric_url', '');
+  const rubricUrl = existingUrl || permanentUrl;
+
+  log('rubric_url_set', { rubricId, rubricUrl, isNew: !existingUrl });
 
   // ── Write URL back to Airtable ────────────────────────────────────────────
+  // Always set Rubric URL Status to Active. Only write rubric_url if not
+  // already set — the permanent URL never changes across regenerations.
+  const fieldsToWrite = { 'Rubric URL Status': 'Active' };
+  if (!existingUrl) fieldsToWrite.rubric_url = permanentUrl;
+
   try {
-    await updateRecord(RUBRIC_TABLE, rubricId, {
-      rubric_url:          rubricUrl,
-      'Rubric URL Status': 'Active',
-    });
+    await updateRecord(RUBRIC_TABLE, rubricId, fieldsToWrite);
   } catch (err) {
     log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
     return errorResponse(res, 500, `HTML generated but failed to save to Airtable: ${rubricUrl}`);

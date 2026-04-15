@@ -1,10 +1,11 @@
 /**
  * Minimal local dev server — no Vercel CLI needed.
- * Loads .env.local, then serves POST /api/generate-tile-pptx and /api/generate-tile-draft.
+ * Loads .env.local, then serves all api/* endpoints.
  * Run: node dev-server.mjs
  */
 import { createServer } from 'http';
 import { readFileSync } from 'fs';
+import { URL } from 'url';
 
 // ── Load .env.local ────────────────────────────────────────────────────────
 const env = readFileSync('.env.local', 'utf8');
@@ -15,22 +16,27 @@ for (const line of env.split('\n')) {
 }
 
 // ── Dynamically import handlers ────────────────────────────────────────────
-const { default: pptxHandler }         = await import('./api/generate-tile-pptx.js');
-const { default: draftHandler }        = await import('./api/generate-tile-draft.js');
-const { default: pdfHandler }          = await import('./api/generate-tile-pdf.js');
-const { default: tileHtmlHandler }     = await import('./api/generate-tile-html.js');
-const { default: rubricDraftHandler }  = await import('./api/generate-rubric-draft.js');
-const { default: rubricHtmlHandler }     = await import('./api/generate-rubric-html.js');
+const { default: pptxHandler }             = await import('./api/generate-tile-pptx.js');
+const { default: draftHandler }            = await import('./api/generate-tile-draft.js');
+const { default: pdfHandler }              = await import('./api/generate-tile-pdf.js');
+const { default: tileHtmlHandler }         = await import('./api/generate-tile-html.js');
+const { default: tileViewHandler }         = await import('./api/tile-view.js');
+const { default: deactivateTileHandler }   = await import('./api/deactivate-tile.js');
+const { default: rubricDraftHandler }      = await import('./api/generate-rubric-draft.js');
+const { default: rubricHtmlHandler }       = await import('./api/generate-rubric-html.js');
+const { default: rubricViewHandler }       = await import('./api/rubric-view.js');
 const { default: deactivateRubricHandler } = await import('./api/deactivate-rubric.js');
-// rubricPdfHandler retained for reference but not registered as an active route (deprecated)
 
 const ROUTES = {
   '/api/generate-tile-pptx':    pptxHandler,
   '/api/generate-tile-draft':   draftHandler,
   '/api/generate-tile-pdf':     pdfHandler,
   '/api/generate-tile-html':    tileHtmlHandler,
+  '/api/tile-view':             tileViewHandler,
+  '/api/deactivate-tile':       deactivateTileHandler,
   '/api/generate-rubric-draft': rubricDraftHandler,
   '/api/generate-rubric-html':  rubricHtmlHandler,
+  '/api/rubric-view':           rubricViewHandler,
   '/api/deactivate-rubric':     deactivateRubricHandler,
 };
 
@@ -45,10 +51,15 @@ const server = createServer((req, res) => {
       req.body = {};
     }
 
-    const handler = ROUTES[req.url];
+    // Parse path and query string so handlers can use req.query
+    const parsed = new URL(req.url, 'http://localhost');
+    const pathname = parsed.pathname;
+    req.query = Object.fromEntries(parsed.searchParams.entries());
+
+    const handler = ROUTES[pathname];
     if (!handler) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: `No handler for ${req.url}` }));
+      res.end(JSON.stringify({ error: `No handler for ${pathname}` }));
       return;
     }
 
@@ -57,6 +68,9 @@ const server = createServer((req, res) => {
     res.json   = (data) => {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(data, null, 2));
+    };
+    res.send   = (data) => {
+      res.end(data);
     };
 
     try {
