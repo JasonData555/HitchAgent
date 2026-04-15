@@ -9,15 +9,17 @@ Internal tool for Hitch Partners. Generates branded candidate tile documents (Po
 ```
 api/
   generate-tile-draft.js   POST /api/generate-tile-draft   — Claude synthesis → Airtable
-  generate-tile-html.js    POST /api/generate-tile-html    — HTML tile generation → Vercel Blob → Airtable
+  generate-tile-html.js    POST /api/generate-tile-html    — Permanent URL registration → Airtable
   generate-tile-pptx.js    POST /api/generate-tile-pptx    — PPTX generation → Vercel Blob → Airtable
   generate-tile-pdf.js     POST /api/generate-tile-pdf     — PDF generation → Vercel Blob → Airtable
   generate-rubric-draft.js POST /api/generate-rubric-draft — Rubric note synthesis → Airtable
-  generate-rubric-html.js  POST /api/generate-rubric-html  — HTML rubric generation → Vercel Blob → Airtable
+  generate-rubric-html.js  POST /api/generate-rubric-html  — Permanent URL registration → Airtable
   generate-rubric-pdf.js   POST /api/generate-rubric-pdf   — Rubric PDF → Vercel Blob → Airtable
+  tile-view.js             GET  /api/tile-view             — Live server-side rendering of candidate tile
+  rubric-view.js           GET  /api/rubric-view           — Live server-side rendering of rubric document
   deactivate-tile.js       POST /api/deactivate-tile       — Delete tile blob, clear tile_url
-  deactivate-rubric.js     POST /api/deactivate-rubric     — Delete rubric blob, clear rubric_url
-  view.js                  GET  /api/view                  — Proxy blob URL for inline browser rendering
+  deactivate-rubric.js     POST /api/deactivate-rubric     — Set Rubric URL Status: Deactivated (no blob deletion)
+  view.js                  GET  /api/view                  — Proxy blob URL for inline browser rendering (legacy)
 lib/
   airtable.js              Airtable REST client (getRecord, updateRecord, getFieldValue, getAttachmentUrl, getRecordsByFormula)
   anthropic.js             Claude wrapper — builds prompt, calls API, parses JSON response; synthesizeRubricFields()
@@ -136,7 +138,6 @@ Fields read by the rubric endpoints:
 | `Location` | Text | HTML + PDF endpoints |
 | `Current Team Size` | Text | HTML + PDF endpoints |
 | `Est. Team Size in 18-24 Months` | Text | HTML + PDF endpoints |
-| `Position Reports To` | Text | HTML + PDF endpoints |
 | `client_logo` | Attachment | HTML + PDF endpoints |
 
 Fields **written** by the rubric endpoints:
@@ -157,7 +158,7 @@ Fields **written** by the rubric endpoints:
 
 **Rubric schema prerequisites** (must be configured in Airtable UI):
 - Add `Must Have`, `Nice to Have`, `Red Flags`, `Success in the Role`, `Functional Responsibilities` (Long text) to Rubric table
-- Add `Location`, `Current Team Size`, `Est. Team Size in 18-24 Months`, `Position Reports To` (Text) to Rubric table
+- Add `Location`, `Current Team Size`, `Est. Team Size in 18-24 Months` (Text) to Rubric table
 - Add `client_logo` (Attachment) to Rubric table
 - Add `rubric_url` (URL or Text) and `Rubric URL Status` (Single select) to Rubric table
 
@@ -257,13 +258,11 @@ The PPTX and PDF endpoints are independent — either or both can be triggered f
 
 1. Fetches the Rubric record from Airtable
 2. Validates `Rubric Draft Status === 'Approved'`
-3. Reads all five content fields plus context fields (Location, Team Size, Reports To) from the fresh fetch
-4. Downloads Hitch logo + optional client logo as base64 data URIs in parallel (non-fatal if unavailable)
-5. Generates HTML document via `lib/pdf-rubric.js`
-6. Uploads to Vercel Blob (`rubrics/<recordId>-<timestamp>.html`, public access)
-7. Proxies the URL through `/api/view` so the browser renders HTML inline
-8. Updates Airtable `rubric_url` (proxy URL) and sets `Rubric URL Status: Active`
-9. Returns `{ status, message, data: { rubricId, clientName, rubricUrl }, warnings }`
+3. Constructs a permanent URL: `<proto>://<host>/api/rubric-view?id=<rubricId>`
+4. Writes `rubric_url` to Airtable only if the field is not already set (idempotent across re-runs); always sets `Rubric URL Status: Active`
+5. Returns `{ status, message, data: { rubricId, clientName, rubricUrl } }`
+
+No HTML is generated or stored. `/api/rubric-view` fetches Airtable and renders the document live on every request, so the stored URL always reflects current content.
 
 ### POST /api/generate-rubric-pdf
 
@@ -413,13 +412,13 @@ Letter **portrait** (8.5" × 11"), 0.5in top/sides + 0.6in bottom margin. HTML a
 ```
 .header         (flex row: Hitch logo | title | client logo)
 .accent-line    (3px blue)
-.context-bar    (Position Reports To | Current Team Size | Est. Team Size | Location)
+.context-bar    (Position | Location | Current Team Size | Est. Team Size 18-24 Mo)
 .content        (five sections: Must Have, Nice to Have, Red Flags, Success in Role, Functional Responsibilities)
 .footer         (position:fixed; bottom:10px; navy bar + italic text)
 ```
 
 **Key implementation details:**
-- `buildRubricDocument({ clientName, searchName, location, currentTeamSize, teamSize18Months, positionReportsTo, mustHave, niceToHave, redFlags, successInRole, functionalResponsibility, hitchLogoDataUri, clientLogoDataUri })` — all content sourced from fresh Airtable fetch at generation time
+- `buildRubricDocument({ clientName, searchName, location, currentTeamSize, teamSize18Months, mustHave, niceToHave, redFlags, successInRole, functionalResponsibility, hitchLogoDataUri, clientLogoDataUri })` — all content sourced from fresh Airtable fetch at generation time
 - Content fields rendered as hyphen-bulleted lists with `**bold**` labels converted to `<strong>`
 - Logos embedded as base64 data URIs; missing logos fall back to text labels (soft failure)
 - Same Puppeteer request-interception security model as Candidate Tile PDF

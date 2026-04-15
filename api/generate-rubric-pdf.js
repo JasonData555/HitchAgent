@@ -99,7 +99,6 @@ export default async function handler(req, res) {
   const location          = getFieldValue(fields, 'Location', '');
   const currentTeamSize   = getFieldValue(fields, 'Current Team Size', '');
   const teamSize18Months  = getFieldValue(fields, 'Est. Team Size in 18-24 Months', '');
-  const positionReportsTo = getFieldValue(fields, 'Position Reports To', '');
 
   const hitchLogoUrl  = process.env.HITCH_LOGO_URL || null;
   const clientLogoUrl = getAttachmentUrl(fields, 'client_logo') || null;
@@ -129,7 +128,6 @@ export default async function handler(req, res) {
       location,
       currentTeamSize,
       teamSize18Months,
-      positionReportsTo,
       mustHave,
       niceToHave,
       redFlags,

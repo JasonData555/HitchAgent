@@ -6,19 +6,19 @@
  * endpoint, and saves it back to the "rubric_url" field on the Rubric record on first run.
  * Subsequent runs for the same record are idempotent — the URL is never overwritten.
  *
+ * No HTML is generated or stored here. /api/rubric-view fetches Airtable and renders
+ * the document live on every request, so the URL always reflects current content.
+ *
  * Required header: x-api-key
  * Body: { "rubricId": "recXXXXXXXX" }
  * Requires: Rubric Draft Status = "Approved"
  *
  * Environment variables (in addition to shared ones in CLAUDE.md):
  *   RUBRIC_TABLE_ID  — Airtable table name/ID for the Rubric table
- *   HITCH_LOGO_URL   — Public HTTPS URL for the Hitch Partners logo PNG
  */
 
 import { timingSafeEqual } from 'crypto';
-import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
-import { buildRubricDocument } from '../lib/pdf-rubric.js';
-import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
+import { getRecord, updateRecord, getFieldValue } from '../lib/airtable.js';
 import { log } from '../lib/logger.js';
 
 const RUBRIC_TABLE = process.env.RUBRIC_TABLE_ID || 'Rubric';
@@ -74,7 +74,6 @@ export default async function handler(req, res) {
 
   const { fields } = record;
   const clientName = getFieldValue(fields, 'client_name', '');
-  const searchName = getFieldValue(fields, 'Search', '');
 
   // ── Validate status is Approved ───────────────────────────────────────────
   const currentStatus = getFieldValue(fields, 'Rubric Draft Status', '');
@@ -86,52 +85,7 @@ export default async function handler(req, res) {
     );
   }
 
-  // ── Extract content fields ────────────────────────────────────────────────
-  const mustHave               = getFieldValue(fields, 'Must Have', '');
-  const niceToHave             = getFieldValue(fields, 'Nice to Have', '');
-  const redFlags               = getFieldValue(fields, 'Red Flags', '');
-  const successInRole          = getFieldValue(fields, 'Success in the Role', '');
-  const functionalResp         = getFieldValue(fields, 'Functional Responsibilities', '');
-  const location               = getFieldValue(fields, 'Location', '');
-  const currentTeamSize        = getFieldValue(fields, 'Current Team Size', '');
-  const teamSize18Months       = getFieldValue(fields, 'Est. Team Size in 18-24 Months', '');
-
   log('airtable_fetch_complete', { rubricId, clientName });
-
-  // ── Download logos in parallel (non-fatal if unavailable) ───────────────────
-  const warnings = [];
-  const hitchLogoUrl  = process.env.HITCH_LOGO_URL;
-  const clientLogoUrl = getAttachmentUrl(fields, 'client_logo');
-
-  const [hitchLogoDataUri, clientLogoDataUri] = await Promise.all([
-    hitchLogoUrl  ? imageToBase64(hitchLogoUrl,  guessMimeType(hitchLogoUrl)).catch(() => null)  : Promise.resolve(null),
-    clientLogoUrl ? imageToBase64(clientLogoUrl, guessMimeType(clientLogoUrl)).catch(() => null) : Promise.resolve(null),
-  ]);
-
-  if (!hitchLogoDataUri)  warnings.push('Hitch logo could not be loaded; using text fallback');
-  if (!clientLogoDataUri) warnings.push('Client logo could not be loaded; using text fallback');
-
-  // ── Generate HTML ─────────────────────────────────────────────────────────
-  let htmlString;
-  try {
-    htmlString = buildRubricDocument({
-      clientName,
-      searchName,
-      location,
-      currentTeamSize,
-      teamSize18Months,
-      mustHave,
-      niceToHave,
-      redFlags,
-      successInRole,
-      functionalResponsibility: functionalResp,
-      hitchLogoDataUri,
-      clientLogoDataUri,
-    });
-  } catch (err) {
-    log('error', { error: err.message, rubricId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
-    return errorResponse(res, 500, 'HTML generation failed');
-  }
 
   // ── Build permanent URL (record-ID-based, never changes) ────────────────────
   // The URL points to /api/rubric-view which renders live content on every
@@ -170,6 +124,5 @@ export default async function handler(req, res) {
       clientName,
       rubricUrl,
     },
-    warnings,
   });
 }
