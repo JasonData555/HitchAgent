@@ -13,6 +13,7 @@ import { timingSafeEqual } from 'crypto';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl, getRecordsByFormula } from '../lib/airtable.js';
 import { extractTextFromPdf } from '../lib/pdf-extract.js';
 import { synthesizeCandidateContent } from '../lib/anthropic.js';
+import { fetchLinkedInProfile } from '../lib/apify-linkedin.js';
 import { log } from '../lib/logger.js';
 
 const TABLE        = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
@@ -100,6 +101,23 @@ export default async function handler(req, res) {
   };
 
   const notes = getFieldValue(fields, 'Notes', '');
+
+  // ── LinkedIn enrichment (optional, non-blocking) ─────────────────────────
+  // AIRTABLE PREREQUISITE: Add "LinkedIn Scraped" (Checkbox) field to the
+  // Candidate Tile table. Without it the guard is skipped but the feature still works.
+  let linkedInData = '';
+  const linkedInUrl = getFieldValue(fields, 'LinkedIn', '');
+  const alreadyScraped = fields['LinkedIn Scraped'] === true;
+
+  if (linkedInUrl && !alreadyScraped) {
+    log('linkedin_scrape_started', { tileId });
+    linkedInData = await fetchLinkedInProfile(linkedInUrl, tileId);
+    if (linkedInData) {
+      log('linkedin_scrape_complete', { tileId });
+    }
+  } else if (alreadyScraped) {
+    log('linkedin_scrape_skipped', { reason: 'already_scraped', tileId });
+  }
 
   // ── Rubric Matrix JSON + priority fields lookup (optional) ───────────────
   // Follows the Project → Rubric join: Candidate Tile.Project (linked record)
@@ -198,7 +216,8 @@ export default async function handler(req, res) {
       notes,
       rubricMatrixJson,
       rubricPriorities,
-      interviewerNotes
+      interviewerNotes,
+      linkedInData
     );
   } catch (err) {
     log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
@@ -220,6 +239,7 @@ export default async function handler(req, res) {
       'Culture Add': synthesized.cultureAdd,
       'Anticipated Concerns': synthesized.anticipatedConcerns,
       'Tile Draft Status': 'Draft Ready',
+      ...(linkedInData ? { 'LinkedIn Scraped': true } : {}),
     });
   } catch (err) {
     log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
