@@ -102,22 +102,35 @@ export default async function handler(req, res) {
 
   const notes = getFieldValue(fields, 'Notes', '');
 
-  // ── LinkedIn enrichment (optional, non-blocking) ─────────────────────────
+  // ── LinkedIn enrichment + Resume extraction (started in parallel) ─────────
+  // Both tasks are kicked off before the Rubric/ITI lookups so their wait
+  // times overlap with those sequential Airtable calls.  Max combined wait
+  // is max(10s Apify, ~2s PDF) instead of 30s + 2s in series.
   // AIRTABLE PREREQUISITE: Add "LinkedIn Scraped" (Checkbox) field to the
   // Candidate Tile table. Without it the guard is skipped but the feature still works.
-  let linkedInData = '';
-  const linkedInUrl = getFieldValue(fields, 'LinkedIn', '');
+  const linkedInUrl  = getFieldValue(fields, 'LinkedIn', '');
   const alreadyScraped = fields['LinkedIn Scraped'] === true;
 
-  if (linkedInUrl && !alreadyScraped) {
-    log('linkedin_scrape_started', { tileId });
-    linkedInData = await fetchLinkedInProfile(linkedInUrl, tileId);
-    if (linkedInData) {
-      log('linkedin_scrape_complete', { tileId });
-    }
+  const linkedInTask = (linkedInUrl && !alreadyScraped)
+    ? fetchLinkedInProfile(linkedInUrl, tileId).catch(err => {
+        log('error', { event: 'linkedin_scrape_unexpected_error', detail: err.message, tileId });
+        return '';
+      })
+    : Promise.resolve('');
+
+  if (!linkedInUrl) {
+    log('info', { event: 'linkedin_scrape_skipped', reason: 'no_linkedin_url', tileId });
   } else if (alreadyScraped) {
     log('linkedin_scrape_skipped', { reason: 'already_scraped', tileId });
+  } else {
+    log('linkedin_scrape_started', { tileId });
   }
+
+  const warnings = [];
+  const resumeUrl = getAttachmentUrl(fields, 'Resume');
+  const resumeTask = resumeUrl
+    ? extractTextFromPdf(resumeUrl)
+    : Promise.resolve({ success: false, text: '', error: 'No resume attached' });
 
   // ── Rubric Matrix JSON + priority fields lookup (optional) ───────────────
   // Follows the Project → Rubric join: Candidate Tile.Project (linked record)
@@ -183,22 +196,24 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Resume extraction ────────────────────────────────────────────────────
-  const warnings = [];
+  // ── Await LinkedIn + Resume (both started above) ─────────────────────────
+  const [linkedInData, resumeResult] = await Promise.all([linkedInTask, resumeTask]);
+
+  if (linkedInData) {
+    log('linkedin_scrape_complete', { tileId });
+  }
+
   let resumeText = '';
   let resumeParseStatus = 'No Resume';
-
-  const resumeUrl = getAttachmentUrl(fields, 'Resume');
   if (resumeUrl) {
-    const pdfResult = await extractTextFromPdf(resumeUrl);
-    if (pdfResult.success) {
-      resumeText = pdfResult.text;
+    if (resumeResult.success) {
+      resumeText = resumeResult.text;
       resumeParseStatus = 'Success';
       log('pdf_parse_complete', { characterCount: resumeText.length, tileId });
     } else {
       resumeParseStatus = 'Failed';
-      warnings.push(`Resume could not be parsed: ${pdfResult.error}`);
-      log('pdf_parse_failed', { error: pdfResult.error, tileId });
+      warnings.push(`Resume could not be parsed: ${resumeResult.error}`);
+      log('pdf_parse_failed', { error: resumeResult.error, tileId });
     }
   }
 
