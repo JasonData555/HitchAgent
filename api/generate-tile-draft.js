@@ -257,7 +257,8 @@ export default async function handler(req, res) {
       ...(linkedInData ? { 'LinkedIn Scraped': true } : {}),
     });
   } catch (err) {
-    log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    log('error', { event: 'airtable_update_failed', error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
+    await updateRecord(TABLE, tileId, { 'Tile Draft Status': 'Draft Error' }).catch(() => {});
     return errorResponse(res, 500, 'Failed to save draft');
   }
 
