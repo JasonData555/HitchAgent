@@ -20,7 +20,7 @@
 import { timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
-import { buildRubricDocument } from '../lib/pdf-rubric.js';
+import { buildRubricPdf } from '../lib/pdf-rubric.js';
 import { renderHtmlToPdf } from '../lib/pdf-render.js';
 import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
 import { log } from '../lib/logger.js';
@@ -122,7 +122,7 @@ export default async function handler(req, res) {
   // ── Build HTML document ───────────────────────────────────────────────────
   let htmlString;
   try {
-    htmlString = buildRubricDocument({
+    htmlString = buildRubricPdf({
       clientName,
       searchName,
       location,

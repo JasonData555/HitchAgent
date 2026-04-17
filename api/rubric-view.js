@@ -22,7 +22,7 @@
  */
 
 import { getRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
-import { buildRubricDocument } from '../lib/pdf-rubric.js';
+import { buildRubricHtml } from '../lib/pdf-rubric.js';
 import { imageToBase64, guessMimeType } from '../lib/fetch-image.js';
 import { log } from '../lib/logger.js';
 
@@ -178,7 +178,7 @@ export default async function handler(req, res) {
   // ── Render HTML ───────────────────────────────────────────────────────────
   let htmlString;
   try {
-    htmlString = buildRubricDocument({
+    htmlString = buildRubricHtml({
       clientName,
       searchName,
       location,
