@@ -66,6 +66,7 @@ vercel.json                maxDuration: 60s for all api/*.js functions
 | `CHROME_EXECUTABLE_PATH` | **Local dev only** — path to local Chrome binary (e.g. `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`). Omit in production; Vercel uses `@sparticuz/chromium`. |
 | `RUBRIC_TABLE_ID` | Airtable table name or ID for the Rubric table; falls back to `"Rubric"` if unset |
 | `ITI_TABLE_ID` | Airtable table name or ID for the ITI Input table; falls back to `"ITI Input"` if unset |
+| `APIFY_API_TOKEN` | Apify API token for the `harvestapi/linkedin-profile-scraper` Actor (LinkedIn profile enrichment during tile draft generation; non-fatal if absent) |
 
 ---
 
