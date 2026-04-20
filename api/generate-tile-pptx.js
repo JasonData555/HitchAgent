@@ -10,7 +10,7 @@
  * Requires: Tile Draft Status = "Approved"
  */
 
-import { randomUUID, timingSafeEqual } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { createCandidateTilePresentation } from '../lib/pptx-tile.js';
@@ -20,6 +20,16 @@ const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
 const PPTX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const TILE_ID_RE = /^rec[A-Za-z0-9]{14}$/;
+
+function slugify(name) {
+  return (name || '')
+    .normalize('NFD')                   // decompose accents: é → e + combining mark
+    .replace(/[\u0300-\u036f]/g, '')    // strip combining diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')        // non-alphanumeric → hyphen
+    .replace(/^-+|-+$/g, '')            // trim leading/trailing hyphens
+    || 'unknown';                        // fallback for empty result
+}
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -132,11 +142,12 @@ export default async function handler(req, res) {
   let blobUrl;
   try {
     const { url } = await put(
-      `tiles/${randomUUID()}.pptx`,
+      `tiles/${slugify(candidateName)}-${tileId}.pptx`,
       pptxBuffer,
       {
         access: 'public',
         contentType: PPTX_CONTENT_TYPE,
+        allowOverwrite: true,
       }
     );
     blobUrl = url;
@@ -150,7 +161,7 @@ export default async function handler(req, res) {
   // ── Update Airtable attachment field ──────────────────────────────────────
   try {
     await updateRecord(TABLE, tileId, {
-      'Candidate Tile PowerPoint': [{ url: blobUrl }],
+      'Candidate Tile PowerPoint': [{ url: blobUrl, filename: `${slugify(candidateName)}-candidate-tile.pptx` }],
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });

@@ -13,7 +13,7 @@
  * to the Candidate Tile table before using this endpoint.
  */
 
-import { randomUUID, timingSafeEqual } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 import { put } from '@vercel/blob';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl } from '../lib/airtable.js';
 import { createCandidateTileHtml } from '../lib/html-tile.js';
@@ -23,6 +23,16 @@ import { log } from '../lib/logger.js';
 const TABLE = process.env.AIRTABLE_TABLE_ID || 'Candidate Tile';
 const PDF_CONTENT_TYPE = 'application/pdf';
 const TILE_ID_RE = /^rec[A-Za-z0-9]{14}$/;
+
+function slugify(name) {
+  return (name || '')
+    .normalize('NFD')                   // decompose accents: é → e + combining mark
+    .replace(/[\u0300-\u036f]/g, '')    // strip combining diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')        // non-alphanumeric → hyphen
+    .replace(/^-+|-+$/g, '')            // trim leading/trailing hyphens
+    || 'unknown';                        // fallback for empty result
+}
 
 function errorResponse(res, status, message) {
   return res.status(status).json({
@@ -155,11 +165,12 @@ export default async function handler(req, res) {
   let blobUrl;
   try {
     const { url } = await put(
-      `tiles/${randomUUID()}.pdf`,
+      `tiles/${slugify(candidateName)}-${tileId}.pdf`,
       pdfBuffer,
       {
         access: 'public',
         contentType: PDF_CONTENT_TYPE,
+        allowOverwrite: true,
       }
     );
     blobUrl = url;
@@ -178,7 +189,7 @@ export default async function handler(req, res) {
   let updateResult;
   try {
     updateResult = await updateRecord(TABLE, tileId, {
-      'Candidate Tile PDF': [{ url: blobUrl, filename: `candidate-tile-${tileId}.pdf` }],
+      'Candidate Tile PDF': [{ url: blobUrl, filename: `${slugify(candidateName)}-candidate-tile.pdf` }],
     });
   } catch (err) {
     log('error', { error: err.message, blobUrl, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
