@@ -139,14 +139,6 @@ export default async function handler(req, res) {
   const photoUrl     = getAttachmentUrl(fields, 'Profile Pic');
   const hitchLogoUrl = process.env.HITCH_LOGO_URL || null;
 
-  // [PARSER DEBUG 1] — Raw Airtable field values (remove before next production deploy)
-  for (const [name, val] of Object.entries({ situation, relevantDomainExpertise, reasonsToConsider, cultureAdd, anticipatedConcerns })) {
-    if (val) {
-      console.log(`[PARSER DEBUG 1] ${name}:`, JSON.stringify(val.substring(0, 200)));
-      console.log(`[PARSER DEBUG 1b] ${name} char codes (first 8):`, [...val.substring(0, 8)].map(c => c.charCodeAt(0)));
-    }
-  }
-
   log('airtable_fetch_complete', { candidateName, tileId });
 
   // ── Pre-fetch images as base64 data URIs (non-fatal if unavailable) ───────
