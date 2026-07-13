@@ -26,6 +26,12 @@ const { default: rubricDraftHandler }      = await import('./api/generate-rubric
 const { default: rubricHtmlHandler }       = await import('./api/generate-rubric-html.js');
 const { default: rubricViewHandler }       = await import('./api/rubric-view.js');
 const { default: deactivateRubricHandler } = await import('./api/deactivate-rubric.js');
+const { default: portalLoginHandler }      = await import('./api/portal-auth/login.js');
+const { default: portalCallbackHandler }   = await import('./api/portal-auth/callback.js');
+const { default: generatePortalHandler }   = await import('./api/generate-portal.js');
+const { default: portalDataHandler }       = await import('./api/portal-data.js');
+const { default: portalViewHandler }       = await import('./api/portal-view.js');
+const { default: portalFeedbackHandler }   = await import('./api/portal-feedback.js');
 
 const ROUTES = {
   '/api/generate-tile-pptx':    pptxHandler,
@@ -38,6 +44,12 @@ const ROUTES = {
   '/api/generate-rubric-html':  rubricHtmlHandler,
   '/api/rubric-view':           rubricViewHandler,
   '/api/deactivate-rubric':     deactivateRubricHandler,
+  '/api/portal-auth/login':     portalLoginHandler,
+  '/api/portal-auth/callback':  portalCallbackHandler,
+  '/api/generate-portal':       generatePortalHandler,
+  '/api/portal-data':           portalDataHandler,
+  '/api/portal-view':           portalViewHandler,
+  '/api/portal-feedback':       portalFeedbackHandler,
 };
 
 // ── HTTP server ────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@
 import { timingSafeEqual } from 'crypto';
 import { getRecord, updateRecord, getFieldValue, getAttachmentUrl, getRecordsByFormula } from '../lib/airtable.js';
 import { extractTextFromPdf } from '../lib/pdf-extract.js';
-import { synthesizeCandidateContent } from '../lib/anthropic.js';
+import { synthesizeCandidateContent, extractRubricItemTitles } from '../lib/anthropic.js';
 import { fetchLinkedInProfile } from '../lib/apify-linkedin.js';
 import { log } from '../lib/logger.js';
 
@@ -169,6 +169,31 @@ export default async function handler(req, res) {
     rubricPriorities = { mustHave: '', niceToHave: '', redFlags: '' };
   }
 
+  // ── Extract Rubric item titles for Rubric Match table generation ─────────
+  // Calls extractRubricItemTitles() on each priority field to get short item titles.
+  // Combined ordered array: must_have first / nice_to_have second / red_flag last.
+  // Formatted as pipe-delimited placeholder lines to inject into the Claude prompt.
+  // Non-fatal — if no items are found the table is omitted and rubricMatch is empty.
+  //
+  // AIRTABLE PREREQUISITE: Add "Rubric Match" (Long Text, plain text, rich text disabled)
+  // to the Candidate Tile table before running this endpoint for the first time.
+  let rubricItemsBlock = null;
+  {
+    const { mustHave, niceToHave, redFlags } = rubricPriorities;
+    if (mustHave || niceToHave || redFlags) {
+      const items = [
+        ...extractRubricItemTitles(mustHave,   'must_have'),
+        ...extractRubricItemTitles(niceToHave, 'nice_to_have'),
+        ...extractRubricItemTitles(redFlags,   'red_flag'),
+      ];
+      if (items.length > 0) {
+        rubricItemsBlock = items
+          .map(i => `${i.title} | ${i.priority} | (assign verdict) | (write note)`)
+          .join('\n');
+      }
+    }
+  }
+
   // ── ITI interviewer notes lookup (optional) ───────────────────────────────
   // Uses the searchName from the Rubric Matrix JSON to find linked ITI Input
   // records and collect attributed panel member notes for Culture Add calibration.
@@ -232,7 +257,8 @@ export default async function handler(req, res) {
       rubricMatrixJson,
       rubricPriorities,
       interviewerNotes,
-      linkedInData
+      linkedInData,
+      rubricItemsBlock
     );
   } catch (err) {
     log('error', { error: err.message, tileId, ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }) });
@@ -250,7 +276,7 @@ export default async function handler(req, res) {
     await updateRecord(TABLE, tileId, {
       'Situation': synthesized.situation,
       'Relevant Domain Expertise': synthesized.relevantDomainExpertise,
-      'Reasons to Consider': synthesized.reasonsToConsider,
+      'Rubric Match': synthesized.rubricMatch,
       'Culture Add': synthesized.cultureAdd,
       'Anticipated Concerns': synthesized.anticipatedConcerns,
       'Tile Draft Status': 'Draft Ready',

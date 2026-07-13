@@ -569,3 +569,322 @@ The `airtable.js` client retries on HTTP 429 with exponential backoff: 1s → 2s
 | Rubric PDF generation failure | 500 | Rubric PDF generation failed |
 | Rubric blob upload failure | 500 | Failed to upload rubric PDF to storage |
 | Airtable rubric save failure | 500 | Failed to save rubric draft / PDF generated but failed to save to Airtable |
+
+---
+---
+
+# Client Portal (subsystem 2)
+
+> Everything above documents **subsystem 1** — the candidate-tile and rubric
+> document generator. Everything below documents **subsystem 2** — the
+> **client portal**, the primary client-facing surface for a search engagement.
+> The two subsystems share the same repo, Airtable base, Vercel project, and
+> security primitives, but are otherwise independent.
+
+## Project Identity
+
+This repository hosts two subsystems:
+
+1. **Tile / Rubric generator** (documented above) — generates branded candidate
+   tile and rubric documents (PPTX, PDF, hosted HTML) from Airtable data.
+2. **Client Portal** (documented below) — a per-search, client-facing web portal
+   that surfaces Market Intelligence, the Job Description, the candidate pipeline,
+   target companies, and an interviewer feedback workflow.
+
+The portal is **activated per search** when a PM sets the linked Rubric's status
+to **"Shared with Client"** in Airtable. That triggers an automation which POSTs
+to `/api/generate-portal`, generating content and bringing the portal live.
+
+> **Not Next.js.** Despite some upstream specs describing this as a "Next.js
+> project," this repo is a **plain Vercel serverless-functions** project — ES
+> modules under `api/*.js`, served locally by `dev-server.mjs`. There is no
+> `pages/`, `app/`, or `next.config.*`. Portal routes follow the same
+> serverless-function + live-Airtable-render pattern as `rubric-view.js` and
+> `tile-view.js`.
+
+## The Non-Negotiables (portal)
+
+- **Never modify `rubric-view.js` or `tile-view.js`.**
+- **Never add npm packages without explicit instruction.** Use built-in `fetch`
+  for HTTP and `crypto` for token/signature work.
+- **Never hardcode Airtable table or field names** — always import them from
+  `/lib/airtableFields.js`.
+- **Never expose `AIRTABLE_BASE_ID`, `AIRTABLE_API_KEY`, or raw Airtable record
+  IDs** in client-rendered HTML or JavaScript. `tile_url` and similar values are
+  constructed server-side and returned as opaque strings.
+- **Never store auth tokens in `localStorage`.** Use **httpOnly cookies** for the
+  LinkedIn session token; use `sessionStorage` only for ephemeral UI state.
+- **All portal routes must import `validatePortalSession` from `/lib/portalAuth.js`**
+  — never re-implement auth logic inline.
+- **The rendering pattern is live Airtable reads on every request** — no static
+  file generation, no response caching. (Exception: Claude-generated MI/JD content
+  is generated once and stored in Rubric fields.)
+
+## Stack (portal)
+
+- **Framework:** Vercel serverless functions (ES modules) — **not** Next.js.
+- **Deployment:** Vercel.
+- **Database:** Airtable via REST API (`AIRTABLE_API_KEY`).
+- **Auth:** **LinkedIn OAuth 2.0 (OpenID Connect)** — reviewers sign in with
+  LinkedIn; the callback's deciding access gate is an **email-domain match** against
+  the Searches `domain` (OIDC `openid profile email` returns no employer, so the
+  LinkedIn company id is only a logged secondary signal), then it issues a signed,
+  httpOnly session cookie.
+- **Email:** Resend — retained for non-auth transactional email if needed (the
+  portal sends no emails as part of the auth flow; reviewers receive the portal URL
+  from their Hitch search team directly).
+- **AI:** Anthropic Claude API (`claude-sonnet-4-6`) for Market Intelligence + JD
+  generation.
+- **Styling:** Inline styles + `<style>` blocks in HTML-rendering routes (same
+  pattern as `rubric-view` / `tile-view` — no CSS framework). See `design.md`.
+
+## Environment Variables (portal — supplements the table above)
+
+The portal requires these **in addition to** all existing variables documented in
+the [Environment Variables](#environment-variables) table above (`AIRTABLE_API_KEY`,
+`AIRTABLE_BASE_ID`, `ANTHROPIC_API_KEY`, `INTERNAL_API_KEY`, `BLOB_READ_WRITE_TOKEN`,
+`HITCH_LOGO_URL`, `APIFY_API_TOKEN`, `CHROME_EXECUTABLE_PATH`, `*_TABLE_ID`, etc.).
+**None of the existing variables are removed.**
+
+| Variable | Description |
+|---|---|
+| `RESEND_API_KEY` | Resend API key — reserved; **no code path currently sends email** |
+| `LINKEDIN_CLIENT_ID` | LinkedIn OAuth app client ID |
+| `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth app client secret |
+| `LINKEDIN_REDIRECT_URI` | `https://hitch-agent.vercel.app/api/portal-auth/callback` — the code reads `LINKEDIN_REDIRECT_URI` exactly (login.js + callback.js); `.env.local` must use this name (not `…_URL`) or OAuth breaks |
+| `PORTAL_SESSION_SECRET` | Secret for signing session cookies (HMAC-SHA256) |
+
+## File Structure (portal)
+
+```
+lib/
+  airtableFields.js        ALL portal table/field name constants (single source)
+  portalAuth.js            validatePortalSession + setSessionCookie/clearSessionCookie
+  anthropic.js             generatePortalMarketIntelligence + generatePortalJobDescription
+api/
+  portal-auth/
+    login.js               GET  — initiates LinkedIn OAuth (verifies search is Live)
+    callback.js            GET  — OAuth return + email-domain gate, creates session, sets cookie
+  generate-portal.js       POST — webhook receiver + Claude MI/JD generation (x-api-key)
+  portal-view.js           GET  — HTML shell (liveness-gated; bootstraps client JS)
+  portal-data.js           GET  — authenticated JSON data endpoint (cookie)
+  portal-feedback.js       POST — interviewer verdict + notes submission (cookie)
+```
+
+All of these files are **implemented** and registered in `dev-server.mjs` (manual
+ROUTES map; Vercel auto-routes by filename in prod). `rubric-view.js` and
+`tile-view.js` are existing files and must not be touched.
+
+## Airtable Architecture (portal)
+
+Core tables and their roles:
+
+- **Searches** — one record per engagement. Source of truth for `portal_slug`,
+  `client_logo_url`, `domain`, `linkedin_company_id`, `portal_status`,
+  `portal_finalized`, `generation_error`.
+- **Rubric** — one record per search. Stores `rubric_content` (input) and all
+  Claude-generated JD/MI fields (output). Linked to Searches. (This is the same
+  Rubric table used by subsystem 1, with additional portal fields.)
+- **Projects** — junction table, one record per candidate per search. The
+  `Display` checkbox controls pipeline visibility; `feedback_unlocked` controls
+  panel-summary reveal.
+- **Interview Schedule** — one record per scheduled meeting. Stores verdict, notes,
+  interviewer identity, and the session linkage for feedback.
+- **Portal Sessions** — one record per authenticated reviewer session, created at
+  the LinkedIn OAuth callback. Scoped to one `portal_slug`.
+- **Organizations** — target companies, linked to Searches. Drives the **Target
+  Companies** tab when records exist for a search.
+
+## Portal Activation Workflow
+
+The portal activates automatically when a PM sets the Rubric status to
+**"Shared with Client"** in Airtable. An Airtable automation POSTs to
+`/api/generate-portal`, which:
+
+1. Checks idempotency (`portal_finalized` gate; `portal_status` gate).
+2. Calls the Claude API to generate Market Intelligence + Job Description content.
+3. Writes the generated content back to Rubric table fields.
+4. Sets `portal_status = "Live"` on the Searches record.
+
+After this, the portal is live at:
+`https://hitch-agent.vercel.app/api/portal-view?slug=[portal_slug]`
+
+Reviewers authenticate via **LinkedIn OAuth**. The system sends no emails as part
+of auth — reviewers receive the portal URL from their Hitch search team directly.
+
+## API Endpoints (portal)
+
+All portal routes set `Cache-Control: no-store` and read Airtable live. Auth differs
+by route: `generate-portal` uses the `x-api-key` automation secret; `portal-data` and
+`portal-feedback` use the session cookie; `portal-view` and `portal-auth/*` are
+unauthenticated entry points.
+
+### GET /api/portal-auth/login?slug=
+Verify a Searches record exists for the slug and `portal_status === 'Live'` (else a
+branded "Access restricted" page, 403). Then 302-redirect to LinkedIn's authorize
+endpoint with `state=slug` and scope `openid profile email`. Creates nothing.
+
+### GET /api/portal-auth/callback?code=&state=
+1. Exchange `code` for an access token; fetch the OIDC userinfo (`sub`, `name`, `email`).
+2. Best-effort employer lookup (usually unavailable → logged only).
+3. Fetch the Searches record for `slug` (= `state`).
+4. **Access gate:** reviewer's email domain must match the Searches `domain`
+   (normalized). Mismatch → 302 back with `auth_error=company_mismatch`.
+5. Match the reviewer to an ITI Input panel-member for this search (by email or name).
+6. Create a Portal Sessions record (writes `session_id`, `email`, `portal_slug`,
+   `deactivate_portal_link=false`, and the `name` link when matched; Title/Company
+   auto-populate via lookups).
+7. `setSessionCookie` (signed httpOnly) and 302 to `/api/portal-view?slug=`.
+
+All failures 302 back to portal-view with `auth_error` (`company_mismatch` | `true`) —
+never a raw error page.
+
+### POST /api/generate-portal
+`x-api-key`; body `{ searchRecordId }`. Idempotency gates (`portal_finalized`,
+`portal_status === 'Live'`). Generates MI + JD via Claude (`claude-sonnet-4-6`),
+writes the Rubric output fields, then sets `portal_status = 'Live'` on Searches.
+`export const config = { maxDuration: 60 }`. Failures write `generation_error` and set
+`portal_status = 'Error'`.
+
+### GET /api/portal-view?slug=
+**Liveness gate** (not auth): looks up Searches by slug; missing record, non-`Live`
+status, or any Airtable error → standalone "Access restricted" HTML. Otherwise returns
+a self-contained shell (all CSS/JS inline, `noindex`, **no record IDs / base id / api
+key** in the markup; `<title>` = search name only). Client JS boots →
+`fetch('/api/portal-data', {credentials:'include'})` → renders one of four states
+(Loading / Sign-in / Auth-error / Portal) and populates the four tabs. Sign-in button
+points at `/api/portal-auth/login?slug=`.
+
+### GET /api/portal-data?slug=
+`validatePortalSession(req, slug)` first (only `slug` is read pre-auth; no DB access
+before auth). Live reads compose `{ session, portal, pipeline, interviews,
+organizations }` (see Response Contract below). A defensive final scan rejects the
+response if it would leak the base id, api key, session id, or any stray `rec…` id
+(only `tile_url` and the reviewer's own `schedule_record_id` are allowed). 401 when
+unauthenticated.
+
+### POST /api/portal-feedback
+Body `{ slug, schedule_record_id, verdict, notes }`. Steps:
+1. `validatePortalSession` (first DB touch) — fail → 401 `unauthorized`.
+2. **Onboarding gate:** session must carry `Full Name` + `Interviewer Title`, else 403
+   `onboarding_incomplete` (server-enforced; the UI gate is not a security control).
+3. **Verdict enum:** `['Yes','Soft Yes','Soft No','No']`, else 400 `invalid_verdict`.
+4. **IDOR — all required, every failure an opaque 403 `unauthorized`** (specific reason
+   logged server-side only): id format `^rec[A-Za-z0-9]{14}$`; `schedule_record_id`
+   === session `interview_schedule_record_id`; record exists; the record's `Project`
+   link resolves to this slug's Searches record.
+5. Write `Interviewer Feedback` (verdict), `Feedback Details` (notes),
+   `portal_session_token` (= session `session_id`). **`Interviewer Title` is NOT
+   written** — it is a read-only lookup; PATCHing it would 422 and fail the write.
+   Airtable failure → 500 `write_failed`. Success → 200 `{ success: true }`.
+
+> The My Interviews / feedback features depend on the session's
+> `interview_schedule_record_id` being populated (it binds a reviewer to their
+> meeting). The OAuth callback does not set it — it must be provided by the
+> schedule/session linkage upstream.
+
+## Auth & Session Model (portal)
+
+Session token lives in an httpOnly cookie — never `localStorage`.
+
+```
+cookie name:  hitch_portal_session
+cookie value: "<sessionId>.<hmac>"   hmac = HMAC_SHA256(sessionId, PORTAL_SESSION_SECRET) hex
+attributes:   HttpOnly; SameSite=Strict; Path=/; Max-Age=7d; Secure (production)
+```
+
+`sessionId` is the Portal Sessions `session_id`. Minted by `callback.js` via
+`setSessionCookie`; cleared by `clearSessionCookie`. `validatePortalSession(req, slug)`
+(in `lib/portalAuth.js`) checks, in order: cookie present → signature valid (constant
+-time) → Portal Sessions row exists with that `session_id` → `deactivate_portal_link
+!== true` → `portal_slug === slug`. It returns `{ valid:true, session }` where
+`session` is the **raw Airtable fields object** (read via `getFieldValue`). Every
+failure returns the same opaque `{ valid:false, reason:'unauthorized' }`; the specific
+check is logged server-side only. A reviewer is revoked by checking
+`deactivate_portal_link` in Airtable — no token rotation, no expiry beyond Max-Age.
+
+## portal-data Response Contract
+
+The JSON the shell consumes (stable shape; all content from live reads):
+
+```
+session:       { interviewer_name, interviewer_title, linkedin_company, schedule_record_id }
+portal:        { search_project_name, client_logo_url,
+                 market_intelligence: { company_overview, quick_facts{…}, recent_developments },
+                 role_narrative, mandate_bullets[], reporting_structure,
+                 success_milestones: { first_90_days[], six_months[], twelve_to_eighteen_months[] } }
+pipeline[]:    { name, title, company, initials, tile_url, feedback_unlocked }
+interviews[]:  { schedule_record_id, candidate_name, date, time, verdict, notes,
+                 is_submitted, token_matches, panel_summary[] }
+organizations[]:{ name, description, city, employee_count,
+                  current_security_leaders[], previous_security_leaders[] }
+```
+
+There is **no `company_name`** field — the Overview Display heading and header logo
+fallback are derived from `search_project_name` (split on the first dash variant).
+`quick_facts` keys: `founded, headquarters, structure, stage, funding_or_market_cap,
+investors, revenue, headcount, key_customers, key_executives` (render non-empty only).
+`panel_summary` is populated only when the candidate's `feedback_unlocked` is true.
+
+## Airtable Field Constants (portal)
+
+`lib/airtableFields.js` is the single source for every portal table/field name
+(verified via the Airtable MCP `describe_table` against base `app8IuY5nHuUvrri4`).
+Never hardcode names in route files. Non-obvious / footgun names:
+
+- **ProjStat** (`TABLES.PROJECTS`): `DISPLAY = 'Display ?'` (trailing space **and** `?`);
+  `PROJECT_NAME = 'Project Name'` (link → Searches); `FEEDBACK_UNLOCKED = 'feedback_unlocked'`.
+- **Interview Schedule**: `VERDICT = 'Interviewer Feedback'`, `NOTES = 'Feedback Details'`,
+  `SESSION_TOKEN = 'portal_session_token'`, `PROJECT = 'Project'` (link → Searches),
+  `INTERVIEWER_TITLE = 'Interviewer Title'` (**read-only lookup — never write**).
+- **Portal Sessions**: `SESSION_ID = 'session_id'`, `SCHEDULE_RECORD_ID =
+  'interview_schedule_record_id'`, `NAME_LINK = 'name'` (link → ITI Input, the only
+  written identity field), `FULL_NAME = 'Full Name'` (formula), Title/Company are lookups.
+- **Searches**: `NAME = 'Client&Search'`, `PORTAL_SLUG`, `PORTAL_STATUS`, `DOMAIN`,
+  `CLIENT_LOGO` (attachment → `getAttachmentUrl`), `RUBRIC_LINK = 'Rubric'`.
+- **Rubric** (portal output written by generate-portal): `market_intelligence_narrative`
+  (JSON string), `job_description_narrative`, `mandate_bullets` (newline-joined),
+  `success_milestones` (JSON string), `reporting_structure`.
+
+## Portal Tabs
+
+Four tabs, in order: **Overview · Pipeline · Target Companies · My Interviews**.
+The **Target Companies** tab is hidden entirely when zero Organization records
+exist for the search.
+
+## Skills (portal)
+
+Two skills govern the portal domain — read them at the start of any session that
+touches it:
+
+- `~/.claude/skills/hitch-jd-generation/SKILL.md` — **all content generation.**
+  Applies unchanged: the Hitch voice, banned phrases, MI/JD prompts, field
+  routing, idempotency, and calibration examples are authoritative.
+- `~/.claude/skills/hitch-client-portal/SKILL.md` — portal architecture and design
+  system.
+
+> **⚠️ Override note — CLAUDE.md governs over the `hitch-client-portal` skill on
+> these points.** This project intentionally diverges from that skill's auth and
+> navigation model. Where they differ, **follow CLAUDE.md / `design.md`:**
+>
+> | Topic | `hitch-client-portal` skill says | **This project uses** |
+> |---|---|---|
+> | Auth | Magic-link UUID token in URL hash, looked up in Portal Sessions | **LinkedIn OAuth 2.0** + signed httpOnly cookie |
+> | Auth utility | `validatePortalToken(token, slug)` | **`validatePortalSession`** |
+> | Auth routes | `portal-onboard.js` | **`portal-auth/login.js` + `portal-auth/callback.js`** |
+> | Tabs | 3 (Overview / Pipeline / My Interviews) | **4** (adds **Target Companies**) |
+> | Header wordmark | DM Sans 14px/500 | per `design.md` |
+>
+> All non-auth, non-nav guidance in the skill (live-render principle,
+> `airtableFields.js` discipline, IDOR protection on feedback, onboarding gate,
+> no-internal-IDs-in-HTML, empty states, mobile rules, design tokens) **still
+> applies.** The content-generation skill applies in full.
+
+## Quality Standards (portal)
+
+- Every portal rendered must be **visually identical across search engagements** —
+  same layout, typography, component patterns, and spacing.
+- **Design reference:** [`design.md`](design.md) in the project root — every color,
+  font, spacing, and component decision derives from it.
+- **Aesthetic:** Vanta + Rippling — dark header over a warm off-white body, clean
+  data density, generous whitespace, no decorative elements.
