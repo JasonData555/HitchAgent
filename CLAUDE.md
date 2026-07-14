@@ -341,17 +341,23 @@ No HTML is generated or stored. `/api/rubric-view` fetches Airtable and renders 
 
 **Response format (tile draft):** JSON with keys `situation`, `relevantDomainExpertise`, `rubricMatch`, `reasonsToConsider`, `cultureAdd`, `anticipatedConcerns` (all strings). Markdown code fences are stripped before parsing. All six keys are required and must be strings — a missing key throws and triggers the single retry. `rubricMatch` may legitimately be an **empty string** when the tile's Search has no linked Rubric.
 
-**Reasons to Consider format:** A **narrative**, not bullets. Exactly two paragraphs, blank line between:
+**Reasons to Consider format:** A bulleted alignment summary under two explicit headings — an executive scans it in fifteen seconds:
 
 ```
-**Must Have —** {≤ 6 sentences on the must_have rows}
+**Must Have**
+- **Theme label:** One punchy sentence.      ← max 5 bullets
 
-**Nice to Have —** {≤ 3 sentences on the nice_to_have rows}
+**Nice to Have**
+- **Theme label:** One punchy sentence.      ← max 3 bullets
 ```
 
-Paragraph 2 is omitted when the Rubric has no Nice to Have items. Sentence caps are the enforcement mechanism — a word cap alone was ignored by the model, and telling it to cover *every* row against a 30-item rubric produced a 280-word wall. It must **synthesize into themes, not enumerate rows**.
+Each bullet is ONE sentence, ≤ 25 words, opening with a bold 2–4-word theme label. The Nice to Have heading is omitted entirely when the Rubric has no Nice to Have items. With no linked Rubric, the section degrades to 4 unheaded bullets of the candidate's strongest experience.
 
-Each paragraph is a **`plain` line** to `parseFormattedText()` (bold is inline; the line is not wholly wrapped in `**`), so it renders as `<p><strong>Must Have —</strong> …</p>` in both the PDF and the web tile. Do not turn the labels into standalone bold lines — that would parse as a `heading` instead.
+Bullet and heading **caps are the enforcement mechanism** — a word cap alone was ignored by the model, and instructing it to cover *every* row against a 30-item rubric produced a 280-word wall. It must **synthesize into themes, not enumerate rows**.
+
+**⚠️ `parseFormattedText()` strips the `**` markers from a standalone bold line**, so `**Must Have**` becomes `<p class="block-heading">Must Have</p>` — with *no* `<strong>`. The bold weight comes entirely from the `.block-heading` CSS rule, which is defined in **both** `lib/html-tile-web.js` and `lib/html-tile.js`. Delete either rule and the headings silently render as plain body text.
+
+The web tile renders this section **in full on load** (same HTML passed as preview and full → `expandableSection()` renders it static, no "View more"). It is the section the client scans first; truncating it would defeat the point.
 
 **Rubric Match table (when the Search has a linked Rubric):**
 `extractRubricItemTitles()` (in `lib/anthropic.js`) parses the Rubric's `Must Have`, `Nice to Have`, and `Red Flags` fields into short item titles. It accepts hyphen (`- `), asterisk (`* `), and **numbered (`1. `)** item prefixes, and reduces a leading `**Bold label:**` to the label text — PMs author these fields by hand and use all three forms. The titles are injected into the prompt as pipe-delimited placeholder lines, and Claude returns a completed four-column table:
@@ -364,19 +370,17 @@ Each paragraph is a **`plain` line** to `parseFormattedText()` (bold is inline; 
 - **Verdicts:** `evidenced` (explicitly present — named company, role, direct statement), `inferred` (reasonable but not confirmed — adjacent experience or implied scope), `not_found` (no evidence in resume, notes, or LinkedIn; suggest verifying in a screening call).
 - **⚠️ Verdict meaning is REVERSED for `red_flag` rows:** `evidenced` means the concern IS present (a negative signal); `not_found` means it is NOT present (a positive signal). Notes must read as a concern flag or a clearance accordingly.
 
-**Reasons to Consider calibration (rubric-aware):** The narrative is a prose restatement of the verdicts Claude assigned in the Rubric Match table earlier in the *same* response. Each paragraph runs strongest matches → partial matches → material gaps, translating verdict to language:
+**Reasons to Consider calibration (rubric-aware):** The bullets are a restatement of the verdicts Claude assigned in the Rubric Match table earlier in the *same* response. Bullets under each heading run strongest matches → partial matches → gaps, translating verdict to language:
 
-| Verdict | Language |
+| Verdict | Bullet language |
 |---|---|
-| `evidenced` | Assert the match; name the company/role and one concrete detail (team size, scope, outcome). |
-| `inferred` | Hedge — what supports it, what is missing ("adjacent", "less directly proven"). |
-| `not_found` | State plainly that it is not evidenced in the materials reviewed. Never softened into a match, never invented over. |
+| `evidenced` | Assert it; name the company and one concrete detail (team size, scope, outcome). |
+| `inferred` | Hedge; signal the limit briefly ("adjacent", "implied but not stated"). |
+| `not_found` | State plainly it is not evidenced in the materials reviewed. Never softened into a match, never invented over, never silently dropped. |
 
-`red_flag` rows are **excluded** — they belong to Anticipated Concerns. Gaps live *inside* the Must Have / Nice to Have paragraph they belong to; a third "gaps" paragraph is explicitly forbidden (the model reaches for one, and drops the Nice to Have label to make room).
+`red_flag` rows are **excluded** — they belong to Anticipated Concerns. Gaps become bullets *under the heading they belong to*; a separate "gaps" block is forbidden (the model reaches for one, and drops the Nice to Have heading to make room).
 
-The reader must never learn a scoring artifact exists: `rubric`, `panel`, `interviewer`, `score`, `priority`, `not_found` are banned from the prose, as is naming or quoting the source documents ("the recruiter notes say"). "Must Have" / "Nice to Have" are permitted **only** as the two paragraph labels. (`evidenced` / `inferred` are fine as ordinary English verbs — banning them made the instruction unsatisfiable, since the section is about evidence.)
-
-With no linked Rubric, the section degrades to a single **unlabeled** 3–5 sentence narrative of the candidate's strongest experience.
+The reader must never learn a scoring artifact exists: `rubric`, `panel`, `interviewer`, `score`, `priority`, `not_found` are banned from the bullet text, as is naming or quoting the source documents ("the recruiter notes say"). "Must Have" / "Nice to Have" are permitted **only** as the two heading lines. (`evidenced` / `inferred` are fine as ordinary English verbs — banning them made the instruction unsatisfiable, since the section is about evidence.)
 
 **Anticipated Concerns calibration (rubric-aware):** Driven by the same verdicts — Must Have / Nice to Have `not_found` rows become gaps, and `red_flag` rows marked `evidenced` become concerns. Ordering: Must Have gaps → Nice to Have gaps → Red Flag evidence. If there are no Must Have gaps and no red-flag evidence, note minor interview probes rather than manufacturing concerns.
 
