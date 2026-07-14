@@ -134,7 +134,6 @@ Fields **written** by the app:
 | `Situation` | Draft endpoint (Claude output) |
 | `Relevant Domain Expertise` | Draft endpoint (Claude output) |
 | `Reasons to Consider` | Draft endpoint (Claude output) |
-| `Rubric Match` | Draft endpoint (Claude output — pipe-delimited verdict table) |
 | `Culture Add` | Draft endpoint (Claude output) |
 | `Anticipated Concerns` | Draft endpoint (Claude output) |
 | `Tile Draft Status` | Draft endpoint (`Draft Ready` / `Draft Error`) |
@@ -148,7 +147,6 @@ Fields **written** by the app:
 - Add `Relevant Domain Expertise` (Long text) to Candidate Tile table
 - Add `Culture Add` (Long text) to Candidate Tile table
 - Verify/add `Reasons to Consider` (Long text) to Candidate Tile table
-- Add `Rubric Match` (Long text, **plain text — rich text disabled**) to Candidate Tile table
 - Add `LinkedIn` (URL) to People table; add Lookup to Candidate Tile table
 - Add `Institution` (Text) to People table; add Lookup to Candidate Tile table
 - Add `Candidate Tile PDF` (Attachment) to Candidate Tile table
@@ -245,7 +243,7 @@ All endpoints require:
 3. In parallel: downloads and parses the resume PDF (truncated to 8,000 chars) and scrapes the candidate's LinkedIn profile via Apify
 4. Resolves the linked Rubric (see **Rubric join** below) and the ITI panel notes for the Search
 5. Calls Claude (`claude-haiku-4-5-20251001`, max 6,000 tokens) to generate six content sections
-6. Writes `Situation`, `Relevant Domain Expertise`, `Rubric Match`, `Reasons to Consider`, `Culture Add`, `Anticipated Concerns`, and `Tile Draft Status: Draft Ready` back to Airtable
+6. Writes `Situation`, `Relevant Domain Expertise`, `Reasons to Consider`, `Culture Add`, `Anticipated Concerns`, and `Tile Draft Status: Draft Ready` back to Airtable (**not** `Rubric Match` — see below)
 7. Returns `{ status, message, data: { tileId, candidateName }, warnings }`
 
 Resume parse failures are non-fatal — draft is still generated with a warning in the response. When there is **neither** a parsed resume **nor** LinkedIn data, the work history can only be inferred from prose recruiter notes: the draft still generates, but a warning says so explicitly (tenures and dates will be incomplete — no source contains them).
@@ -331,7 +329,7 @@ No HTML is generated or stored. `/api/rubric-view` fetches Airtable and renders 
 ## Claude Integration
 
 **Model:** `claude-haiku-4-5-20251001`
-**Max tokens:** 6,000 — six sections plus an unbounded tenure list and the Rubric Match table; a long-tenured executive truncates the JSON at 4,000, which surfaces as a `Draft Error`, not a partial write.
+**Max tokens:** 6,000 — six sections plus an unbounded tenure list and the internal Rubric Match table; a long-tenured executive truncates the JSON at 4,000, which surfaces as a `Draft Error`, not a partial write.
 **Retry:** Once on timeout or HTTP 5xx.
 
 **Security in prompts:**
@@ -359,7 +357,10 @@ Bullet and heading **caps are the enforcement mechanism** — a word cap alone w
 
 The web tile renders this section **in full on load** (same HTML passed as preview and full → `expandableSection()` renders it static, no "View more"). It is the section the client scans first; truncating it would defeat the point.
 
-**Rubric Match table (when the Search has a linked Rubric):**
+**Rubric Match table — INTERNAL WORKING STEP, never stored or rendered (when the Search has a linked Rubric):**
+
+> ⚠️ Claude still returns a `rubricMatch` key and still assigns a verdict to every rubric item, because **Reasons to Consider and Anticipated Concerns are both built from those verdicts**. But the table is *not* written to the Airtable `Rubric Match` field and *not* rendered on the tile, PDF, or PPTX — it was redundant with Reasons to Consider and cluttered the layout. **Do not reintroduce a write or a renderer for it.** Removing the verdict step entirely would silently degrade both downstream sections.
+
 `extractRubricItemTitles()` (in `lib/anthropic.js`) parses the Rubric's `Must Have`, `Nice to Have`, and `Red Flags` fields into short item titles. It accepts hyphen (`- `), asterisk (`* `), and **numbered (`1. `)** item prefixes, and reduces a leading `**Bold label:**` to the label text — PMs author these fields by hand and use all three forms. The titles are injected into the prompt as pipe-delimited placeholder lines, and Claude returns a completed four-column table:
 
 ```
@@ -457,7 +458,7 @@ Letter portrait (8.5" × 11"), 0.5in top/sides + 0.1in bottom margin, Arial/Helv
   .header      (54px, flex row: name | title/company | logo)
   .body        (flex row, flex:1)
     .sidebar   (240px fixed width: photo, LinkedIn, Situation, Culture Add, Contact Info, Education + Institution)
-    .main      (flex:1: Domain Expertise, Reasons to Consider, Rubric Match, Anticipated Concerns)
+    .main      (flex:1: Domain Expertise, Reasons to Consider, Anticipated Concerns)
   .footer      (30px, position:fixed in print, navy bar + italic text)
 ```
 
@@ -465,9 +466,9 @@ Letter portrait (8.5" × 11"), 0.5in top/sides + 0.1in bottom margin, Arial/Helv
 
 **Domain Expertise rendering (`expertiseToHtml()`):** Company header lines (e.g. `Coinbase (2016 - present): ...`) render bold navy. Claude emits `Role:`, `Scope:`, `Accomplishments:` as bullet lines (`• Role: ...`); the parser detects these inside the bullet branch (after stripping the bullet prefix) and renders them as `<p><strong>Label:</strong> rest</p>`. Accomplishment bullets (`○ ...`) following an `Accomplishments:` label get class `accomplishments-list` for deeper indent (28px vs 16px).
 
-**Culture Add** renders in the sidebar as a standard `.section` block (label + body), directly below Situation. **Reasons to Consider** and **Rubric Match** render in the main column below Domain Expertise, in that order (Rubric Match as a table via `buildRubricMatchPdfHtml()`; both omitted entirely when their field is empty). **Anticipated Concerns** renders in the main column as a bulleted list (semicolon-delimited items → `<ul class="concerns-list"><li>`), last.
+**Culture Add** renders in the sidebar as a standard `.section` block (label + body), directly below Situation. **Reasons to Consider** renders in the main column below Domain Expertise (omitted entirely when the field is empty). **Anticipated Concerns** renders in the main column as a bulleted list (semicolon-delimited items → `<ul class="concerns-list"><li>`), last.
 
-> The PPTX slide does **not** render Reasons to Consider — its Y-positions are tightly packed against the footer. PPTX carries Domain Expertise, Rubric Match, Culture Add, and Anticipated Concerns only.
+> The PPTX slide does **not** render Reasons to Consider — its Y-positions are tightly packed against the footer. PPTX carries Domain Expertise, Culture Add, and Anticipated Concerns only.
 
 **Unicode arrows** (`→`, `←`, `↑`, `↓`) in Claude-generated text are replaced with word equivalents (`to`, `from`, `up`, `down`) via `replaceArrows()` before HTML encoding — the Lambda Chromium bundle lacks full Unicode Arrows block font coverage.
 
