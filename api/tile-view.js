@@ -162,6 +162,7 @@ export default async function handler(req, res) {
   const linkedinUrl             = getFieldValue(fields, 'LinkedIn');
   const situation               = getFieldValue(fields, 'Situation');
   const relevantDomainExpertise = getFieldValue(fields, 'Relevant Domain Expertise');
+  const rubricMatch             = getFieldValue(fields, 'Rubric Match');
   const reasonsToConsider       = getFieldValue(fields, 'Reasons to Consider');
   const cultureAdd              = getFieldValue(fields, 'Culture Add');
   const anticipatedConcerns     = getFieldValue(fields, 'Anticipated Concerns');
@@ -196,6 +197,7 @@ export default async function handler(req, res) {
       linkedinUrl,
       situation,
       relevantDomainExpertise,
+      rubricMatch,
       reasonsToConsider,
       cultureAdd,
       anticipatedConcerns,

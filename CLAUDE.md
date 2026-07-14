@@ -134,6 +134,7 @@ Fields **written** by the app:
 | `Situation` | Draft endpoint (Claude output) |
 | `Relevant Domain Expertise` | Draft endpoint (Claude output) |
 | `Reasons to Consider` | Draft endpoint (Claude output) |
+| `Rubric Match` | Draft endpoint (Claude output — pipe-delimited verdict table) |
 | `Culture Add` | Draft endpoint (Claude output) |
 | `Anticipated Concerns` | Draft endpoint (Claude output) |
 | `Tile Draft Status` | Draft endpoint (`Draft Ready` / `Draft Error`) |
@@ -147,6 +148,7 @@ Fields **written** by the app:
 - Add `Relevant Domain Expertise` (Long text) to Candidate Tile table
 - Add `Culture Add` (Long text) to Candidate Tile table
 - Verify/add `Reasons to Consider` (Long text) to Candidate Tile table
+- Add `Rubric Match` (Long text, **plain text — rich text disabled**) to Candidate Tile table
 - Add `LinkedIn` (URL) to People table; add Lookup to Candidate Tile table
 - Add `Institution` (Text) to People table; add Lookup to Candidate Tile table
 - Add `Candidate Tile PDF` (Attachment) to Candidate Tile table
@@ -240,12 +242,22 @@ All endpoints require:
 
 1. Fetches the Candidate Tile record from Airtable
 2. Validates status is not `Approved` (prevents overwriting)
-3. Downloads and parses the resume PDF (truncated to 8,000 chars)
-4. Calls Claude (`claude-haiku-4-5-20251001`, max 2,000 tokens) to generate five content sections
-5. Writes `Situation`, `Relevant Domain Expertise`, `Reasons to Consider`, `Culture Add`, `Anticipated Concerns`, and `Tile Draft Status: Draft Ready` back to Airtable
-6. Returns `{ status, message, data: { tileId, candidateName }, warnings }`
+3. In parallel: downloads and parses the resume PDF (truncated to 8,000 chars) and scrapes the candidate's LinkedIn profile via Apify
+4. Resolves the linked Rubric (see **Rubric join** below) and the ITI panel notes for the Search
+5. Calls Claude (`claude-haiku-4-5-20251001`, max 6,000 tokens) to generate six content sections
+6. Writes `Situation`, `Relevant Domain Expertise`, `Rubric Match`, `Reasons to Consider`, `Culture Add`, `Anticipated Concerns`, and `Tile Draft Status: Draft Ready` back to Airtable
+7. Returns `{ status, message, data: { tileId, candidateName }, warnings }`
 
-Resume parse failures are non-fatal — draft is still generated with a warning in the response.
+Resume parse failures are non-fatal — draft is still generated with a warning in the response. When there is **neither** a parsed resume **nor** LinkedIn data, the work history can only be inferred from prose recruiter notes: the draft still generates, but a warning says so explicitly (tenures and dates will be incomplete — no source contains them).
+
+**⚠️ Rubric join — do NOT use a `filterByFormula`.** An Airtable formula sees a linked-record field as its **display name**, never the record id, so the old `FIND(recId, ARRAYJOIN({Client}))` predicate silently matched zero rows and disabled every rubric-aware branch of the prompt. The join is a direct link traversal: the tile's `Project` link **is** the Searches record → read its `Rubric` link → `getRecord()`. The Searches `Client&Search` name also drives the ITI panel-notes lookup (the `Rubric Matrix JSON` field is usually empty and must not gate it).
+
+**LinkedIn enrichment (`lib/apify-linkedin.js`).** Uses the `harvestapi/linkedin-profile-scraper` Apify actor. All failures are non-fatal — the function returns `''` and the draft proceeds on Resume + Notes.
+
+- The actor's schema is `experience[]` with `position` (the job title), `companyName`, and `startDate` / `endDate` as `{ month, year, text }` objects — `endDate` for a current role is `{ text: 'Present' }` with no month/year. **Read `.text` first.** Getting these key names wrong does not error; every field silently degrades to `Unknown`.
+- **The actor returns HTTP 201 with an error OBJECT in the dataset** on quota exhaustion (`{"error": "Free users are limited to 20 runs..."}`) and similar failures. This is treated as a scrape failure — formatting one would produce a block of "Not provided" lines that reads to Claude as a real profile.
+- `LinkedIn Scraped` (checkbox) is set **only on a successful scrape**, and it hard-skips the scrape on subsequent runs. If it is ever set by a bogus scrape, the profile will never be re-fetched until the box is manually cleared.
+- The `apify_4b_raw_item_sample` log line prints the actor's raw payload (truncated), so schema drift or a quota error is immediately visible in the function logs.
 
 ### POST /api/generate-tile-pptx
 
@@ -274,12 +286,13 @@ The PPTX and PDF endpoints are independent — either or both can be triggered f
 
 1. Fetches the Candidate Tile record from Airtable
 2. Validates `Tile Draft Status === 'Approved'`
-3. Downloads logo + profile photo as base64 data URIs in parallel (non-fatal if unavailable)
-4. Generates a self-contained interactive HTML page via `lib/html-tile-web.js` (expandable sections, modal viewer, print CSS)
-5. Uploads to Vercel Blob (`tiles/<recordId>-<timestamp>.html`, public access)
-6. Proxies the URL through `/api/view` so the browser renders HTML inline
-7. Updates Airtable `tile_url` (proxy URL) and sets `Tile Status: Active`
-8. Returns `{ status, message, data: { tileId, candidateName, htmlUrl }, warnings }`
+3. Constructs a permanent URL: `<proto>://<host>/api/tile-view?id=<tileId>`
+4. Writes `tile_url` unless it **already** points at `/api/tile-view`; always sets `Tile Status: Active`
+5. Returns `{ status, message, data: { tileId, candidateName, htmlUrl }, warnings }`
+
+**No HTML is stored.** `/api/tile-view` fetches Airtable and renders the document live on every request, so a PM edit to `Situation`, `Relevant Domain Expertise`, `Reasons to Consider`, `Culture Add`, etc. is visible immediately with no regeneration. Same model as `/api/generate-rubric-html`.
+
+**⚠️ The idempotency guard migrates legacy URLs — do not narrow it back to `if (!existingUrl)`.** Early records were given a Vercel Blob HTML snapshot (or an `/api/view` proxy of one) as their `tile_url`. Those are frozen at generation-time content: a PM edit can never reach them, and they predate Reasons to Consider entirely. The guard therefore rewrites any `tile_url` that is **not** already a `/api/tile-view` link. A canonical link is never rewritten — clients already hold it.
 
 ### POST /api/generate-rubric-draft
 
@@ -318,7 +331,7 @@ No HTML is generated or stored. `/api/rubric-view` fetches Airtable and renders 
 ## Claude Integration
 
 **Model:** `claude-haiku-4-5-20251001`
-**Max tokens:** 4,000
+**Max tokens:** 6,000 — six sections plus an unbounded tenure list and the Rubric Match table; a long-tenured executive truncates the JSON at 4,000, which surfaces as a `Draft Error`, not a partial write.
 **Retry:** Once on timeout or HTTP 5xx.
 
 **Security in prompts:**
@@ -326,28 +339,50 @@ No HTML is generated or stored. `/api/rubric-view` fetches Airtable and renders 
 - Long-form content (`resumeText`, `notes`) is escaped with `escapeXmlClose()` to prevent XML tag breakout
 - All user data is wrapped in XML delimiters and the system prompt explicitly labels them as untrusted data
 
-**Response format (tile draft):** JSON with keys `situation`, `relevantDomainExpertise`, `reasonsToConsider`, `cultureAdd`, `anticipatedConcerns` (all strings). Markdown code fences are stripped before parsing.
+**Response format (tile draft):** JSON with keys `situation`, `relevantDomainExpertise`, `rubricMatch`, `reasonsToConsider`, `cultureAdd`, `anticipatedConcerns` (all strings). Markdown code fences are stripped before parsing. All six keys are required and must be strings — a missing key throws and triggers the single retry. `rubricMatch` may legitimately be an **empty string** when the tile's Search has no linked Rubric.
 
-**Reasons to Consider format:** Exactly 4 bullets. Each bullet: bold 3–5-word differentiator label (e.g. `**Enterprise security leadership:**`) followed by 1–2 substantiating sentences. Max 200 words total. Bold `**markers**` are stripped by `stripMarkdown()` before HTML rendering — output is plain text in the PDF.
+**Reasons to Consider format:** A **narrative**, not bullets. Exactly two paragraphs, blank line between:
 
-**Structured rubric evaluation (when `mustHave`/`niceToHave`/`redFlags` are present):**
-The prompt instructs Claude to complete a 3-step internal evaluation before writing any section output:
-1. **EVALUATE MUST HAVE ITEMS** — classify each item as `EVIDENCE FOUND` (named company, role context, concrete outcome) or `NO EVIDENCE FOUND` against resume + notes
-2. **EVALUATE NICE TO HAVE ITEMS** — same classification
-3. **EVALUATE RED FLAG ITEMS** — classify each flag as `EVIDENCE FOUND` (specific observation) or `NO EVIDENCE FOUND`
+```
+**Must Have —** {≤ 6 sentences on the must_have rows}
 
-Evidence quality standard (applied in steps 1–2):
-- **Strong** (EVIDENCE FOUND for Reasons to Consider): named company + specific role context, quantified outcome, or explicit reference/recruiter observation
-- **Weak** (not used for Reasons to Consider): generic mention, implied experience, single passing reference
-- **None** (use for Anticipated Concerns gaps): absent from resume and notes, or only tangentially related
+**Nice to Have —** {≤ 3 sentences on the nice_to_have rows}
+```
 
-**Reasons to Consider calibration (rubric-aware):** Draws exclusively from Must Have / Nice to Have `EVIDENCE FOUND` items with strong evidence. Each bullet must name the company and include a concrete detail. Must Have items fill top bullets; Nice to Have fills remaining slots. Items with no/weak evidence are excluded.
+Paragraph 2 is omitted when the Rubric has no Nice to Have items. Sentence caps are the enforcement mechanism — a word cap alone was ignored by the model, and telling it to cover *every* row against a 30-item rubric produced a 280-word wall. It must **synthesize into themes, not enumerate rows**.
 
-**Anticipated Concerns calibration (rubric-aware):**
-- *Input A — gaps:* Must Have `NO EVIDENCE FOUND` → `"No evidence of [item] in the candidate's background."` Nice to Have gaps (secondary) → `"Limited evidence of [item] — worth exploring in interview."`
-- *Input B — red flags:* Red Flag `EVIDENCE FOUND` → `"Evidence of [specific observation] noted — aligns with [red flag category]."`
-- Ordering: Must Have gaps → Nice to Have gaps → Red Flag evidence
-- If no Must Have gaps and no Red Flag evidence, note minor interview probes rather than manufacturing concerns
+Each paragraph is a **`plain` line** to `parseFormattedText()` (bold is inline; the line is not wholly wrapped in `**`), so it renders as `<p><strong>Must Have —</strong> …</p>` in both the PDF and the web tile. Do not turn the labels into standalone bold lines — that would parse as a `heading` instead.
+
+**Rubric Match table (when the Search has a linked Rubric):**
+`extractRubricItemTitles()` (in `lib/anthropic.js`) parses the Rubric's `Must Have`, `Nice to Have`, and `Red Flags` fields into short item titles. It accepts hyphen (`- `), asterisk (`* `), and **numbered (`1. `)** item prefixes, and reduces a leading `**Bold label:**` to the label text — PMs author these fields by hand and use all three forms. The titles are injected into the prompt as pipe-delimited placeholder lines, and Claude returns a completed four-column table:
+
+```
+[Item title] | [priority] | [verdict] | [Notes]
+```
+
+- **Priorities:** `must_have` / `nice_to_have` / `red_flag`. Row order is must_have → nice_to_have → red_flag, preserving the original item order within each group.
+- **Verdicts:** `evidenced` (explicitly present — named company, role, direct statement), `inferred` (reasonable but not confirmed — adjacent experience or implied scope), `not_found` (no evidence in resume, notes, or LinkedIn; suggest verifying in a screening call).
+- **⚠️ Verdict meaning is REVERSED for `red_flag` rows:** `evidenced` means the concern IS present (a negative signal); `not_found` means it is NOT present (a positive signal). Notes must read as a concern flag or a clearance accordingly.
+
+**Reasons to Consider calibration (rubric-aware):** The narrative is a prose restatement of the verdicts Claude assigned in the Rubric Match table earlier in the *same* response. Each paragraph runs strongest matches → partial matches → material gaps, translating verdict to language:
+
+| Verdict | Language |
+|---|---|
+| `evidenced` | Assert the match; name the company/role and one concrete detail (team size, scope, outcome). |
+| `inferred` | Hedge — what supports it, what is missing ("adjacent", "less directly proven"). |
+| `not_found` | State plainly that it is not evidenced in the materials reviewed. Never softened into a match, never invented over. |
+
+`red_flag` rows are **excluded** — they belong to Anticipated Concerns. Gaps live *inside* the Must Have / Nice to Have paragraph they belong to; a third "gaps" paragraph is explicitly forbidden (the model reaches for one, and drops the Nice to Have label to make room).
+
+The reader must never learn a scoring artifact exists: `rubric`, `panel`, `interviewer`, `score`, `priority`, `not_found` are banned from the prose, as is naming or quoting the source documents ("the recruiter notes say"). "Must Have" / "Nice to Have" are permitted **only** as the two paragraph labels. (`evidenced` / `inferred` are fine as ordinary English verbs — banning them made the instruction unsatisfiable, since the section is about evidence.)
+
+With no linked Rubric, the section degrades to a single **unlabeled** 3–5 sentence narrative of the candidate's strongest experience.
+
+**Anticipated Concerns calibration (rubric-aware):** Driven by the same verdicts — Must Have / Nice to Have `not_found` rows become gaps, and `red_flag` rows marked `evidenced` become concerns. Ordering: Must Have gaps → Nice to Have gaps → Red Flag evidence. If there are no Must Have gaps and no red-flag evidence, note minor interview probes rather than manufacturing concerns.
+
+All rubric-aware calibration degrades gracefully: with no linked Rubric, `rubricMatch` is an empty string and the other sections fall back to generic instructions.
+
+**Source harness (work history assembly):** Before writing any section, Claude builds a working list of tenures as the **union** of Resume + Notes, supplemented (never overridden) by LinkedIn. A company named only in passing prose in the notes ("nearly 15 years at Microsoft", "took a title dip to go to Google") still counts as a tenure and gets its own entry. A tenure with no date in any source is rendered `(dates not available)` — never dropped or merged.
 
 All three calibration blocks gate on `hasPriorities`/`mustHave`/`redFlags` being truthy — graceful degradation to generic instructions when Rubric data is absent.
 
@@ -418,7 +453,7 @@ Letter portrait (8.5" × 11"), 0.5in top/sides + 0.1in bottom margin, Arial/Helv
   .header      (54px, flex row: name | title/company | logo)
   .body        (flex row, flex:1)
     .sidebar   (240px fixed width: photo, LinkedIn, Situation, Culture Add, Contact Info, Education + Institution)
-    .main      (flex:1: Domain Expertise, Reasons to Consider, Anticipated Concerns)
+    .main      (flex:1: Domain Expertise, Reasons to Consider, Rubric Match, Anticipated Concerns)
   .footer      (30px, position:fixed in print, navy bar + italic text)
 ```
 
@@ -426,7 +461,9 @@ Letter portrait (8.5" × 11"), 0.5in top/sides + 0.1in bottom margin, Arial/Helv
 
 **Domain Expertise rendering (`expertiseToHtml()`):** Company header lines (e.g. `Coinbase (2016 - present): ...`) render bold navy. Claude emits `Role:`, `Scope:`, `Accomplishments:` as bullet lines (`• Role: ...`); the parser detects these inside the bullet branch (after stripping the bullet prefix) and renders them as `<p><strong>Label:</strong> rest</p>`. Accomplishment bullets (`○ ...`) following an `Accomplishments:` label get class `accomplishments-list` for deeper indent (28px vs 16px).
 
-**Culture Add** renders in the sidebar as a standard `.section` block (label + body), directly below Situation. **Anticipated Concerns** renders in the main column as a bulleted list (semicolon-delimited items → `<ul class="concerns-list"><li>`), directly below Reasons to Consider.
+**Culture Add** renders in the sidebar as a standard `.section` block (label + body), directly below Situation. **Reasons to Consider** and **Rubric Match** render in the main column below Domain Expertise, in that order (Rubric Match as a table via `buildRubricMatchPdfHtml()`; both omitted entirely when their field is empty). **Anticipated Concerns** renders in the main column as a bulleted list (semicolon-delimited items → `<ul class="concerns-list"><li>`), last.
+
+> The PPTX slide does **not** render Reasons to Consider — its Y-positions are tightly packed against the footer. PPTX carries Domain Expertise, Rubric Match, Culture Add, and Anticipated Concerns only.
 
 **Unicode arrows** (`→`, `←`, `↑`, `↓`) in Claude-generated text are replaced with word equivalents (`to`, `from`, `up`, `down`) via `replaceArrows()` before HTML encoding — the Lambda Chromium bundle lacks full Unicode Arrows block font coverage.
 
