@@ -16,22 +16,33 @@ for (const line of env.split('\n')) {
 }
 
 // ── Dynamically import handlers ────────────────────────────────────────────
-const { default: pptxHandler }             = await import('./api/generate-tile-pptx.js');
-const { default: draftHandler }            = await import('./api/generate-tile-draft.js');
-const { default: pdfHandler }              = await import('./api/generate-tile-pdf.js');
-const { default: tileHtmlHandler }         = await import('./api/generate-tile-html.js');
+//
+// In production these are NOT api/ files — Vercel's Hobby plan allows only 12
+// Serverless Functions and it creates one per file under api/, so the handlers
+// live in lib/handlers/ and are fronted by dispatcher functions in api/ plus
+// rewrites in vercel.json. See CLAUDE.md.
+//
+// This dev server bypasses the dispatchers and maps public paths straight to
+// handlers. The ROUTES keys below are the real public URLs and must stay in
+// lockstep with the `rewrites` block in vercel.json.
+const { default: pptxHandler }             = await import('./lib/handlers/generate-tile-pptx.js');
+const { default: draftHandler }            = await import('./lib/handlers/generate-tile-draft.js');
+const { default: pdfHandler }              = await import('./lib/handlers/generate-tile-pdf.js');
+const { default: tileHtmlHandler }         = await import('./lib/handlers/generate-tile-html.js');
 const { default: tileViewHandler }         = await import('./api/tile-view.js');
-const { default: deactivateTileHandler }   = await import('./api/deactivate-tile.js');
-const { default: rubricDraftHandler }      = await import('./api/generate-rubric-draft.js');
-const { default: rubricHtmlHandler }       = await import('./api/generate-rubric-html.js');
+const { default: deactivateTileHandler }   = await import('./lib/handlers/deactivate-tile.js');
+const { default: rubricDraftHandler }      = await import('./lib/handlers/generate-rubric-draft.js');
+const { default: rubricHtmlHandler }       = await import('./lib/handlers/generate-rubric-html.js');
+const { default: rubricPdfHandler }        = await import('./lib/handlers/generate-rubric-pdf.js');
 const { default: rubricViewHandler }       = await import('./api/rubric-view.js');
-const { default: deactivateRubricHandler } = await import('./api/deactivate-rubric.js');
+const { default: deactivateRubricHandler } = await import('./lib/handlers/deactivate-rubric.js');
 const { default: portalLoginHandler }      = await import('./api/portal-auth/login.js');
 const { default: portalCallbackHandler }   = await import('./api/portal-auth/callback.js');
-const { default: generatePortalHandler }   = await import('./api/generate-portal.js');
-const { default: portalDataHandler }       = await import('./api/portal-data.js');
-const { default: portalViewHandler }       = await import('./api/portal-view.js');
-const { default: portalFeedbackHandler }   = await import('./api/portal-feedback.js');
+const { default: generatePortalHandler }   = await import('./lib/handlers/generate-portal.js');
+const { default: portalDataHandler }       = await import('./lib/handlers/portal-data.js');
+const { default: portalViewHandler }       = await import('./lib/handlers/portal-view.js');
+const { default: portalFeedbackHandler }   = await import('./lib/handlers/portal-feedback.js');
+const { default: viewHandler }             = await import('./api/view.js');
 
 const ROUTES = {
   '/api/generate-tile-pptx':    pptxHandler,
@@ -42,6 +53,7 @@ const ROUTES = {
   '/api/deactivate-tile':       deactivateTileHandler,
   '/api/generate-rubric-draft': rubricDraftHandler,
   '/api/generate-rubric-html':  rubricHtmlHandler,
+  '/api/generate-rubric-pdf':   rubricPdfHandler,
   '/api/rubric-view':           rubricViewHandler,
   '/api/deactivate-rubric':     deactivateRubricHandler,
   '/api/portal-auth/login':     portalLoginHandler,
@@ -50,6 +62,7 @@ const ROUTES = {
   '/api/portal-data':           portalDataHandler,
   '/api/portal-view':           portalViewHandler,
   '/api/portal-feedback':       portalFeedbackHandler,
+  '/api/view':                  viewHandler,
 };
 
 // ── HTTP server ────────────────────────────────────────────────────────────

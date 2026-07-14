@@ -4,10 +4,37 @@ Internal tool for Hitch Partners. Generates branded candidate tile documents (Po
 
 ---
 
+## ⚠️ The 12-Function Cap — READ BEFORE ADDING AN ENDPOINT
+
+**Vercel's Hobby plan allows a maximum of 12 Serverless Functions per deployment, and Vercel creates one function per file under `api/` (including nested files).** The project currently uses **10 of 12**.
+
+**Adding a new `api/*.js` file consumes a slot. Adding three breaks every deployment.** This already happened once: the client-portal subsystem took the count from 12 to 18 and wedged `main` — no commit could deploy until it was fixed.
+
+To add an endpoint, **do not create a new file under `api/`**. Instead:
+1. Put the handler in `lib/handlers/<name>.js` (standard `export default async function handler(req, res)`).
+2. Register it in the `ROUTES` table of the appropriate dispatcher in `api/`.
+3. Add a `rewrite` in `vercel.json` mapping the public path to `<dispatcher>?__fn=<key>`.
+4. Add the public path to the `ROUTES` map in `dev-server.mjs`.
+
+Public URLs are **immutable** — Airtable stores `tile_url`/`rubric_url` inside records, Airtable automations POST to the `/api/generate-*` paths, and `/api/portal-auth/callback` is the registered redirect URI in the LinkedIn OAuth app. The rewrite layer exists precisely so these paths never change.
+
+**Vercel resolves the filesystem before rewrites**, so a real file under `api/` always wins over a rewrite for the same path.
+
 ## Project Structure
 
 ```
-api/
+api/                       ── 10 Serverless Functions (max 12; see cap warning above)
+  generate-draft.js        DISPATCHER → generate-tile-draft | generate-rubric-draft | generate-portal
+  generate-doc.js          DISPATCHER → generate-tile-pptx | generate-tile-html | generate-rubric-html
+  generate-pdf.js          DISPATCHER → generate-tile-pdf | generate-rubric-pdf   [Chromium isolated HERE]
+  portal.js                DISPATCHER → portal-view | portal-data | portal-feedback
+  deactivate.js            DISPATCHER → deactivate-tile | deactivate-rubric
+  portal-auth/login.js     GET  /api/portal-auth/login     — real file; initiates LinkedIn OAuth
+  portal-auth/callback.js  GET  /api/portal-auth/callback  — real file; NEVER route through a rewrite (see below)
+  tile-view.js             GET  /api/tile-view             — Live server-side rendering of candidate tile
+  rubric-view.js           GET  /api/rubric-view           — Live server-side rendering of rubric document
+  view.js                  GET  /api/view                  — Proxy blob URL for inline browser rendering (legacy)
+lib/handlers/              ── the real endpoint logic; NOT functions (outside api/)
   generate-tile-draft.js   POST /api/generate-tile-draft   — Claude synthesis → Airtable
   generate-tile-html.js    POST /api/generate-tile-html    — Permanent URL registration → Airtable
   generate-tile-pptx.js    POST /api/generate-tile-pptx    — PPTX generation → Vercel Blob → Airtable
@@ -15,11 +42,12 @@ api/
   generate-rubric-draft.js POST /api/generate-rubric-draft — Rubric note synthesis → Airtable
   generate-rubric-html.js  POST /api/generate-rubric-html  — Permanent URL registration → Airtable
   generate-rubric-pdf.js   POST /api/generate-rubric-pdf   — Rubric PDF → Vercel Blob → Airtable
-  tile-view.js             GET  /api/tile-view             — Live server-side rendering of candidate tile
-  rubric-view.js           GET  /api/rubric-view           — Live server-side rendering of rubric document
+  generate-portal.js       POST /api/generate-portal       — Portal MI/JD generation → Airtable
+  portal-view.js           GET  /api/portal-view           — Portal HTML shell
+  portal-data.js           GET  /api/portal-data           — Authenticated portal JSON
+  portal-feedback.js       POST /api/portal-feedback       — Interviewer verdict submission
   deactivate-tile.js       POST /api/deactivate-tile       — Delete tile blob, clear tile_url
   deactivate-rubric.js     POST /api/deactivate-rubric     — Set Rubric URL Status: Deactivated (no blob deletion)
-  view.js                  GET  /api/view                  — Proxy blob URL for inline browser rendering (legacy)
 lib/
   airtable.js              Airtable REST client (getRecord, updateRecord, getFieldValue, getAttachmentUrl, getRecordsByFormula)
   anthropic.js             Claude wrapper — builds prompt, calls API, parses JSON response; synthesizeRubricFields()
@@ -33,8 +61,16 @@ lib/
   url-validate.js          SSRF guard — assertSafeUrl() allowlist validator
   logger.js                Structured JSON logger (stdout → Vercel function logs)
 dev-server.mjs             Local dev HTTP server (no Vercel CLI needed)
-vercel.json                maxDuration: 60s for all api/*.js functions
+vercel.json                maxDuration 60s + the `rewrites` that map public paths → dispatchers
 ```
+
+**Dispatcher contract.** Each dispatcher holds a `ROUTES` table keyed by a `__fn` value and delegates to a `lib/handlers/` module. `vercel.json` supplies `__fn` via the rewrite destination (e.g. `/api/generate-tile-pdf` → `/api/generate-pdf?__fn=tile-pdf`). Rewrites are internal — the browser URL never changes, and the method, body, and headers are preserved, so Airtable's POST + `x-api-key` automations are unaffected.
+
+**Chromium isolation.** `puppeteer-core` + `@sparticuz/chromium` (~180MB unzipped) is reachable **only** from `api/generate-pdf.js`. Grouping both PDF handlers alone keeps that bundle out of every other lambda's cold start — the portal path carries no heavy dependencies at all. **Do not add a non-PDF handler to `generate-pdf.js`, and do not import `lib/pdf-render.js` from a handler in any other dispatcher.**
+
+**Why `portal-auth/` is not consolidated.** `/api/portal-auth/callback` is the redirect URI registered inside the LinkedIn OAuth app. LinkedIn rejects any `redirect_uri` that isn't the registered one, so this route **cannot be exercised on a preview deployment** — a bug there would only surface in production. Both OAuth files therefore stay as real files under `api/` and are served natively. Leave them alone.
+
+**Local dev diverges from production by design.** `dev-server.mjs` maps public paths straight to `lib/handlers/` and bypasses the dispatchers and rewrites entirely. Its `ROUTES` keys are the real public URLs and must stay in lockstep with the `rewrites` block in `vercel.json`.
 
 ---
 

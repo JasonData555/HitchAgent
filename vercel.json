@@ -1,8 +1,31 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "functions": {
     "api/*.js": {
       "maxDuration": 60
+    },
+    "api/portal-auth/*.js": {
+      "maxDuration": 60
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/api/generate-tile-pdf", "destination": "/api/generate-pdf?__fn=tile-pdf" },
+    { "source": "/api/generate-rubric-pdf", "destination": "/api/generate-pdf?__fn=rubric-pdf" },
+
+    { "source": "/api/generate-tile-pptx", "destination": "/api/generate-doc?__fn=tile-pptx" },
+    { "source": "/api/generate-tile-html", "destination": "/api/generate-doc?__fn=tile-html" },
+    { "source": "/api/generate-rubric-html", "destination": "/api/generate-doc?__fn=rubric-html" },
+
+    { "source": "/api/generate-tile-draft", "destination": "/api/generate-draft?__fn=tile-draft" },
+    { "source": "/api/generate-rubric-draft", "destination": "/api/generate-draft?__fn=rubric-draft" },
+    { "source": "/api/generate-portal", "destination": "/api/generate-draft?__fn=portal" },
+
+    { "source": "/api/portal-view", "destination": "/api/portal?__fn=view" },
+    { "source": "/api/portal-data", "destination": "/api/portal?__fn=data" },
+    { "source": "/api/portal-feedback", "destination": "/api/portal?__fn=feedback" },
+
+    { "source": "/api/deactivate-tile", "destination": "/api/deactivate?__fn=tile" },
+    { "source": "/api/deactivate-rubric", "destination": "/api/deactivate?__fn=rubric" }
+  ]
 }
