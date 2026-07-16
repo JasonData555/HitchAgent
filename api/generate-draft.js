@@ -6,10 +6,12 @@
  *   POST /api/generate-rubric-draft -> ?__fn=rubric-draft
  *   POST /api/generate-portal       -> ?__fn=portal
  *
- * maxDuration comes from vercel.json ("api/*.js": 60). The generate-portal
- * handler used to declare `export const config = { maxDuration: 60 }` itself;
- * that export is inert now that the handler lives under lib/, so the 60s budget
- * it needs is supplied here by that vercel.json rule.
+ * maxDuration is raised to 300s for this dispatcher (both here and via the
+ * "api/generate-draft.js" override in vercel.json). The tile/rubric/portal
+ * synthesis calls can generate large rubric-aware outputs that exceed the
+ * default 60s Hobby budget; Vercel Pro allows up to 300s. Billing is by time
+ * actually consumed, so the higher ceiling only affects genuinely long runs.
+ * (Requires Vercel Pro — Hobby is hard-capped at 60s.)
  *
  * See CLAUDE.md for why dispatchers exist (Vercel Hobby 12-function cap).
  */
@@ -24,7 +26,7 @@ const ROUTES = {
   portal,
 };
 
-export const config = { maxDuration: 60 };
+export const config = { maxDuration: 300 };
 
 export default async function handler(req, res) {
   const fn = ROUTES[req.query?.__fn];
