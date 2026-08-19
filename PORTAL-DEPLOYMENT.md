@@ -38,7 +38,7 @@ from the repo — verify them in the Vercel dashboard.)
 |---|---|---|
 | `AIRTABLE_API_KEY` | ✅ | PAT must have `data.records:read/write` **and access to base `app8IuY5nHuUvrri4`** |
 | `AIRTABLE_BASE_ID` | ✅ | `app8IuY5nHuUvrri4` |
-| `ANTHROPIC_API_KEY` | ✅ | MI/JD generation (`claude-sonnet-4-6`) |
+| `ANTHROPIC_API_KEY` | ✅ | MI/JD generation (`claude-sonnet-4-6` — pinned; see CLAUDE.md) |
 | `INTERNAL_API_KEY` | ✅ | Shared secret the Airtable automation sends as `x-api-key` to `generate-portal` |
 | `LINKEDIN_CLIENT_ID` | ✅ | LinkedIn OAuth app |
 | `LINKEDIN_CLIENT_SECRET` | ✅ | LinkedIn OAuth app |

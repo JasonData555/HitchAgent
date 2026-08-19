@@ -75,9 +75,15 @@ vercel.json                function maxDuration + rewrites (public path → disp
 
 `vercel.json` scopes `api/generate-draft.js` to **`maxDuration: 300`** (Vercel Pro); all other routes stay at 60s. `api/generate-draft.js` also exports `config = { maxDuration: 300 }` — keep the two in agreement.
 
-**Why:** rubric-aware Claude generation (six sections + the internal Rubric Match verdict table, `MAX_TOKENS: 6000`) can run past 60s. When the platform hard-kills a lambda at the timeout, the kill is external, so the handler's `catch` never runs — the record is left silently at **`Not Started`** with no fields and **no `Draft Error`**. The 300s budget gives generation room to finish.
+**Why:** rubric-aware Claude generation (six sections + the internal Rubric Match verdict table, `TILE_MAX_TOKENS: 24000`) can run past 60s. When the platform hard-kills a lambda at the timeout, the kill is external, so the handler's `catch` never runs — the record is left silently at **`Not Started`** with no fields and **no `Draft Error`**. The 300s budget gives generation room to finish.
 
-**Guardrail:** `callClaude()` passes a **120s per-request timeout** (`CLAUDE_TIMEOUT_MS`, `lib/anthropic.js`). A genuinely stuck call now throws a catchable error *inside* the 300s budget → writes `Draft Error` instead of dying silently. 120s keeps 2 attempts (retry-once-on-timeout) under 300s.
+**Guardrail:** `callClaude()` passes a **135s per-request timeout** (`CLAUDE_TIMEOUT_MS`, `lib/anthropic.js`). A genuinely stuck call now throws a catchable error *inside* the 300s budget → writes `Draft Error` instead of dying silently. 135s keeps 2 attempts (retry-once-on-timeout) under 300s (270s + ~30s for fetches and the Airtable write) — **do not raise past ~145s** without revisiting `maxDuration`.
+
+**⚠️ Tile output budget is separate — `TILE_MAX_TOKENS: 24000`, not the shared `MAX_TOKENS: 10000`.** The tile is the only prompt whose output scales on two axes at once: the candidate's career length *and* the linked Rubric's item count (the internal Rubric Match table emits one row per rubric bullet). A 53-item Kraken rubric plus an eight-company tenure list needs ~7–8k tokens and truncated at 6000 — surfacing only as `Unterminated string in JSON at position N`, because `stop_reason` was never checked. `callClaude()` now checks `stop_reason === 'max_tokens'` first and throws a **non-`SyntaxError`**, so the retry guard skips it: truncation is deterministic, and retrying only burned a second full generation to fail identically. Watch for the `claude_truncated` log event. **Thinking tokens consume `max_tokens`, not just billing** — that is why both ceilings rose again when the tile/rubric paths moved to thinking models. Every Claude call now passes `CLAUDE_TIMEOUT_MS` explicitly; the rubric and portal calls previously passed none and inherited the SDK's 10-minute default, which outlives the 300s lambda and invites a silent platform hard-kill.
+
+**⚠️ Response parsing must narrow by block type — never `content[0].text`.** Thinking-capable models emit a `thinking` block first whenever adaptive thinking engages, which on a tile-sized prompt is essentially always. `extractText()` in `lib/anthropic.js` filters to `type === 'text'` and joins; all four `messages.create` sites use it. Reading `content[0].text` returns `undefined` and dies as a misleading `SyntaxError` on 100% of drafts.
+
+**⚠️ The portal is pinned to `claude-sonnet-4-6` — deliberate, not stale.** `callPortalClaudeWebSearch()` concatenates every text block and `JSON.parse`s the result with no extraction or repair. Measured against the Market Intelligence prompt: `claude-opus-5` prefixes a conversational preamble ("I'll research…") before the searches, and `claude-sonnet-5` emits a raw control character inside a JSON string — both fail to parse; Sonnet 4.6 is clean. Harden the parser to extract the JSON document from surrounding prose before attempting an upgrade. Keep `web_search_20250305`: the newer `web_search_20260209` runs code execution under the hood and returns interleaved text/`code_execution_tool_result` blocks that break the same parse.
 
 ---
 
@@ -108,10 +114,10 @@ All generate endpoints: `POST`, header `x-api-key: <INTERNAL_API_KEY>` (constant
 
 **Status lifecycles** (single-select): `Tile Draft Status` and `Rubric Draft Status` both go `Not Started → Draft Ready → Approved` (PM approves in Airtable) → HTML/PPTX/PDF generated. Draft endpoints refuse to overwrite `Approved`; doc endpoints require `Approved`.
 
-- **generate-tile-draft** — fetch record; in parallel parse resume PDF + scrape LinkedIn; resolve linked Rubric + ITI panel notes; Claude (`claude-haiku-4-5-20251001`, 6000 tok) → writes `Situation`, `Relevant Domain Expertise`, `Reasons to Consider`, `Culture Add`, `Anticipated Concerns`, status. Resume/LinkedIn failures non-fatal (warning). No source at all → still generates, warns tenures/dates are incomplete.
+- **generate-tile-draft** — fetch record; in parallel parse resume PDF + scrape LinkedIn; resolve linked Rubric + ITI panel notes; Claude (`claude-sonnet-5`, effort `medium`, 24000 tok) → writes `Situation`, `Relevant Domain Expertise`, `Reasons to Consider`, `Culture Add`, `Anticipated Concerns`, status. Resume/LinkedIn failures non-fatal (warning). No source at all → still generates, warns tenures/dates are incomplete.
 - **generate-tile-pptx / -pdf** — require `Approved`; download logo+photo base64 (SSRF-guarded); build one-slide 16:9 PPTX / Letter-portrait PDF; upload to Blob; write attachment field (PDF also writes `tile_url`). Independent — either/both.
 - **generate-tile-html** — require `Approved`; set `tile_url` = `<proto>://<host>/api/tile-view?id=<tileId>` + `Tile Status: Active`. **No HTML stored** — `/api/tile-view` renders live per request.
-- **generate-rubric-draft** — fetch Rubric; query ITI Input via `{search_project} = "<searchName>"` (≥1 required); `synthesizeRubricFields()` (haiku, 2000 tok) → writes `Must Have`, `Nice to Have`, `Red Flags`, `Success in the Role`, `Functional Responsibilities`, status.
+- **generate-rubric-draft** — fetch Rubric; query ITI Input via `{search_project} = "<searchName>"` (≥1 required); `synthesizeRubricFields()` (`claude-opus-5`, 10000 tok) → writes `Must Have`, `Nice to Have`, `Red Flags`, `Success in the Role`, `Functional Responsibilities`, status.
 - **generate-rubric-html / -pdf** — require `Approved`; html sets `rubric_url` (idempotent) + `Rubric URL Status: Active`, renders live; pdf builds via `lib/pdf-rubric.js`, uploads to Blob, writes `Rubric PDF`.
 
 **⚠️ Rubric join — NOT a `filterByFormula`.** A formula sees a linked field as its display name, never the record id, so `FIND(recId, …)` matched zero rows. The join is a link traversal: tile's `Project` link **is** the Searches record → read its `Rubric` link → `getRecord()`. The Searches `Client&Search` name drives the ITI panel-notes lookup.
@@ -125,7 +131,7 @@ All generate endpoints: `POST`, header `x-api-key: <INTERNAL_API_KEY>` (constant
 - `LinkedIn Scraped` (checkbox) set **only on success** and hard-skips re-scrape; a bogus set means the profile never re-fetches until cleared. `apify_4b_raw_item_sample` logs the raw payload for schema/quota visibility.
 
 ### Claude integration (`lib/anthropic.js`)
-Tile/rubric model `claude-haiku-4-5-20251001`; portal `claude-sonnet-4-6`. Tile `max_tokens 6000`. Retry once on `SyntaxError` / "timeout" / "Missing or invalid field" / HTTP 5xx.
+Tile `claude-sonnet-5` (`TILE_MODEL`, effort `medium`); rubric `claude-opus-5` (`RUBRIC_MODEL`); portal `claude-sonnet-4-6` (`PORTAL_MODEL`). Tile `max_tokens 24000` (`TILE_MAX_TOKENS`); rubric/portal `10000` (`MAX_TOKENS`) — thinking tokens consume `max_tokens`, not just billing. Retry once on `SyntaxError` / "timeout" / "Missing or invalid field" / HTTP 5xx — but **never on a `max_tokens` truncation**, which is deterministic and is thrown as a plain `Error`.
 
 **Security:** short fields via `sanitizeField()`; long-form (`resumeText`, `notes`) via `escapeXmlClose()`; all user data wrapped in XML delimiters labeled untrusted.
 
@@ -161,7 +167,7 @@ Tile/rubric model `claude-haiku-4-5-20251001`; portal `claude-sonnet-4-6`. Tile 
 
 **Non-negotiables:** never modify `rubric-view.js` / `tile-view.js`; never add npm packages without instruction (use built-in `fetch`/`crypto`); never hardcode Airtable names (import from `lib/airtableFields.js`); never expose base id / api key / raw `rec…` ids in client HTML/JS; never store auth tokens in `localStorage` (httpOnly cookie only); all portal routes import `validatePortalSession` from `lib/portalAuth.js`; live Airtable reads every request, `Cache-Control: no-store` (only Claude MI/JD content is generated once and stored).
 
-**Activation:** PM sets the linked Rubric to **"Shared with Client"** → Airtable automation POSTs `/api/generate-portal` → generates MI + JD (`claude-sonnet-4-6`), writes Rubric output fields, sets Searches `portal_status = 'Live'`. Portal lives at `/api/portal-view?slug=<portal_slug>`.
+**Activation:** PM sets the linked Rubric to **"Shared with Client"** → Airtable automation POSTs `/api/generate-portal` → generates MI + JD (`claude-sonnet-4-6` — see the portal-model hold below), writes Rubric output fields, sets Searches `portal_status = 'Live'`. Portal lives at `/api/portal-view?slug=<portal_slug>`.
 
 **Auth = LinkedIn OAuth 2.0 (OIDC)** + signed httpOnly cookie (**overrides the `hitch-client-portal` skill's magic-link model**).
 - `portal-auth/login?slug=` — verify Searches exists and `portal_status==='Live'` (else 403 "Access restricted"); 302 to LinkedIn authorize, `state=slug`, scope `openid profile email`.
@@ -186,7 +192,7 @@ Tile/rubric model `claude-haiku-4-5-20251001`; portal `claude-sonnet-4-6`. Tile 
 `x-api-key` constant-time (`timingSafeEqual`). SSRF `assertSafeUrl()` allowlist (HTTPS only): `airtable.com`, `airtableusercontent.com`, `raw.githubusercontent.com`, `blob.vercel-storage.com`. Prompt injection: XML delimiters + sanitization + untrusted labeling. XSS: `escapeHtml()` on all field values in `html-tile.js`. Puppeteer: request interception blocks all non-`data:`/`about:blank`. tileId regex; production stack traces suppressed; PDF 25 MB max.
 
 ## Logging
-`lib/logger.js` — structured JSON to stdout. Events: `request_received`, `airtable_fetch_complete`, `pdf_parse_complete/_failed`, `claude_api_called/_complete`, `pptx_generated`, `pdf_generated`, `blob_uploaded`, `airtable_updated`, `tile_html_generated`, `rubric_fetch_complete`, `iti_records_fetched`, `rubric_pdf_generated`, `error`, plus `apify_*` scrape trace. Airtable client retries 429 with backoff (1→2→4s, 4 attempts).
+`lib/logger.js` — structured JSON to stdout. Events: `request_received`, `airtable_fetch_complete`, `pdf_parse_complete/_failed`, `claude_api_called/_complete`, `pptx_generated`, `pdf_generated`, `blob_uploaded`, `airtable_updated`, `tile_html_generated`, `rubric_fetch_complete`, `iti_records_fetched`, `rubric_pdf_generated`, `error`, `claude_truncated`, plus `apify_*` scrape trace. Airtable client retries 429 with backoff (1→2→4s, 4 attempts).
 
 ## Local Dev & Deploy
 ```bash
